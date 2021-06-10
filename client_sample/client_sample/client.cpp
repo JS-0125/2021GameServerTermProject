@@ -3,6 +3,7 @@
 #include <SFML/Network.hpp>
 #include <iostream>
 #include <chrono>
+#include<fstream>
 using namespace std;
 
 #ifdef _DEBUG
@@ -37,6 +38,8 @@ constexpr auto BUF_SIZE = MAX_BUFFER;
 int g_left_x;
 int g_top_y;
 int g_myid;
+
+vector<vector<bool>> can_move;
 
 sf::RenderWindow* g_window;
 sf::Font g_font;
@@ -282,7 +285,7 @@ void client_main()
 			int tile_x = i +  g_left_x;
 			int tile_y = j +  g_top_y;
 			if ((tile_x < 0) || (tile_y < 0)) continue;
-			if ((((tile_x / 3)  + (tile_y / 3)) % 2) == 1) {
+			if (can_move[tile_y][tile_x]) {
 				white_tile.a_move(TILE_WIDTH * i + 7, TILE_WIDTH * j + 7);
 				white_tile.a_draw();
 			}
@@ -327,7 +330,6 @@ int main()
 	wcout.imbue(locale("korean"));
 	sf::Socket::Status status = socket.connect("127.0.0.1", SERVER_PORT);
 
-
 	socket.setBlocking(false);
 
 	if (status != sf::Socket::Done) {
@@ -345,6 +347,17 @@ int main()
 	avatar.set_name(name.c_str());
 	sf::RenderWindow window(sf::VideoMode(WINDOW_WIDTH, WINDOW_HEIGHT), "2D CLIENT");
 	g_window = &window;
+
+	ifstream is("terrainData.txt");
+	can_move.resize(WORLD_WIDTH);
+
+	for (int i = 0; i < WORLD_WIDTH; ++i) {
+		can_move[i].reserve(WORLD_WIDTH);
+		for (int n = 0; n < WORLD_WIDTH; ++n) {
+			can_move[i].push_back(is.get());
+		}
+	}
+	cout << "teraain data setting ok" << endl;
 
 	while (window.isOpen())
 	{

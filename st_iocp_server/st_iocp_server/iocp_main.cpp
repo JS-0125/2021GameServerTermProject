@@ -6,10 +6,11 @@
 #include <array>
 #include <queue>
 #include<atomic>
-using namespace std;
 #include <WS2tcpip.h>
 #include <MSWSock.h>
+#include<fstream>
 
+using namespace std;
 
 extern "C" {
 #include"lua.h"
@@ -30,6 +31,7 @@ constexpr int SECTOR_RADIUS = 20;
 
 enum OP_TYPE  { OP_RECV, OP_SEND, OP_ACCEPT, OP_RANDOM_MOVE, OP_ATTACK, OP_PLAYER_APROACH, OP_RUNAWAY};
 enum PL_STATE { PLST_FREE, PLST_CONNECTED, PLST_INGAME };
+
 //enum DIRECTION { D_N, D_S, D_W, D_E, D_NO };
 
 struct EX_OVER
@@ -60,7 +62,7 @@ struct S_OBJECT
 	atomic<PL_STATE> m_state;
 	int		id;
 	EX_OVER m_recv_over;
-	char m_name[100];
+	char m_name[MAX_ID_LEN];
 	short	x, y;
 	short sectorX, sectorY;
 };
@@ -100,12 +102,13 @@ struct pair_hash
 priority_queue <TIMER_EVENT> timer_queue;
 mutex timer_l;
 
-constexpr int SERVER_ID = 0;
 Sector sector[WORLD_HEIGHT / SECTOR_RADIUS][WORLD_WIDTH / SECTOR_RADIUS];
 array <S_OBJECT*, MAX_USER + 1> objects;
 
+constexpr int SERVER_ID = 0;
 HANDLE h_iocp;
 
+vector<vector<bool>> can_move;
 
 unordered_set<pair<int, int>, pair_hash> sector_update(int p_id)
 {
@@ -262,8 +265,14 @@ void send_login_ok_packet(int p_id)
 	p.id = p_id;
 	p.LEVEL = 2;
 	p.type = SC_LOGIN_OK;
-	p.x = objects[p_id]->x = rand() % WORLD_WIDTH;
-	p.y = objects[p_id]->y = rand() % WORLD_HEIGHT;
+	while (1) {
+		int tmpX = rand() % WORLD_WIDTH, tmpY = rand() % WORLD_HEIGHT;
+		if (can_move[tmpY][tmpX]) {
+			p.x = objects[p_id]->x = tmpX;
+			p.y = objects[p_id]->y = tmpY;
+			break;
+		}
+	}
 	p.size = sizeof(p);
 	send_packet(p_id, &p);
 }
@@ -317,10 +326,10 @@ void do_move(int p_id, char dir)
 	auto& x = objects[p_id]->x;
 	auto& y = objects[p_id]->y;
 	switch (dir) {
-	case 0: if (y> 0) y--; break;
-	case 1: if (y < (WORLD_HEIGHT - 1)) y++; break;
-	case 2: if (x > 0) x--; break;
-	case 3: if (x < (WORLD_WIDTH - 1)) x++; break;
+	case 0: if (y> 0 && can_move[y-1][x]) y--; break;
+	case 1: if (y < (WORLD_HEIGHT - 1) && can_move[y+1][x]) y++; break;
+	case 2: if (x > 0 && can_move[y][x-1]) x--; break;
+	case 3: if (x < (WORLD_WIDTH - 1) && can_move[y][x+1]) x++; break;
 	}
 
 	auto serctorIndex = sector_update(p_id);
@@ -579,11 +588,12 @@ void do_npc_random_move(NPC& npc)
 	int y = npc.y;
 
 	switch (rand() % 4) {
-	case 0: if (x < (WORLD_WIDTH - 1)) x++; break;
-	case 1: if (x > 0) x--; break;
-	case 2: if (y < (WORLD_HEIGHT - 1)) y++; break;
-	case 3:if (y > 0) y--; break;
+	case 0: if (x < (WORLD_WIDTH - 1) && can_move[y][x+1]) x++; break;
+	case 1: if (x > 0 && can_move[y][x-1]) x--; break;
+	case 2: if (y < (WORLD_HEIGHT - 1) && can_move[y+1][x]) y++; break;
+	case 3:if (y > 0 && can_move[y-1][x]) y--; break;
 	}
+
 	npc.x = x;
 	npc.y = y;
 
@@ -831,6 +841,23 @@ int API_send_mess(lua_State* L) {
 
 int main()
 {
+	ifstream is ("terrainData.txt");
+	can_move.resize(WORLD_WIDTH);
+
+	for (int i = 0; i < WORLD_WIDTH; ++i) {
+		can_move[i].reserve(WORLD_WIDTH);
+		for (int n = 0; n < WORLD_WIDTH; ++n) {
+			can_move[i].push_back(is.get());
+		}
+	}
+	cout << "teraain data setting ok" << endl;
+	//check terrain data
+	/*for (int i = 0; i < WORLD_WIDTH; ++i) {
+		for (bool n : can_move[i])
+			cout << n << " ";
+	}*/
+
+
 	for (int i = 0; i < MAX_USER + 1; ++i) {
 		if (is_npc(i) == true) {
 			auto& pl = objects[i] = new NPC;
@@ -839,8 +866,15 @@ int main()
 
 			sprintf_s(pl->m_name, "NPC %d", i);
 			pl->m_state = PLST_INGAME;
-			pl->x = rand() % WORLD_WIDTH;
-			pl->y = rand() % WORLD_HEIGHT;
+
+			while (1) {
+				int tmpX= rand() % WORLD_WIDTH, tmpY = rand() % WORLD_HEIGHT;
+				if (can_move[tmpY][tmpX]) {
+					pl->x = tmpX;
+					pl->y = tmpY;
+					break;
+				}
+			}
 
 			int sectorX = pl->x / SECTOR_RADIUS;
 			int sectorY = pl->y / SECTOR_RADIUS;
@@ -878,6 +912,7 @@ int main()
 			pl->m_state = PLST_FREE;
 		}
 	}
+	cout << "초기화 완료" << endl;
 
 	WSADATA WSAData;
 	WSAStartup(MAKEWORD(2, 2), &WSAData);
