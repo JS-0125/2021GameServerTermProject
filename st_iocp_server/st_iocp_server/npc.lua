@@ -1,4 +1,7 @@
-myid = -1;
+myid = -1
+scoreF = {}
+scoreG = {}
+scoreH = {}
 
 function set_uid(x)
 	myid = x;

@@ -139,10 +139,12 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="AStar.cpp" />
     <ClCompile Include="iocp_main.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="2021_텀프_protocol.h" />
+    <ClInclude Include="AStar.h" />
     <ClInclude Include="lauxlib.h" />
     <ClInclude Include="lua.h" />
     <ClInclude Include="luaconf.h" />

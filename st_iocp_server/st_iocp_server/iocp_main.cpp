@@ -9,6 +9,7 @@
 #include <WS2tcpip.h>
 #include <MSWSock.h>
 #include<fstream>
+#include "AStar.h"
 
 using namespace std;
 
@@ -29,7 +30,7 @@ constexpr int MAX_BUFFER = 1024;
 constexpr int SECTOR_RADIUS = 20;
 
 
-enum OP_TYPE  { OP_RECV, OP_SEND, OP_ACCEPT, OP_RANDOM_MOVE, OP_ATTACK, OP_PLAYER_APROACH, OP_RUNAWAY};
+enum OP_TYPE  { OP_RECV, OP_SEND, OP_ACCEPT, OP_RANDOM_MOVE, OP_ATTACK, OP_PLAYER_APROACH, OP_RUNAWAY, OP_CHASE, OP_POINT_MOVE};
 enum PL_STATE { PLST_FREE, PLST_CONNECTED, PLST_INGAME };
 
 //enum DIRECTION { D_N, D_S, D_W, D_E, D_NO };
@@ -48,7 +49,7 @@ struct TIMER_EVENT {
 	OP_TYPE e_type;
 	chrono::system_clock::time_point start_time;
 	int target_id;
-
+	short x, y;
 	constexpr bool operator < (const TIMER_EVENT& L) const
 	{
 		return (start_time > L.start_time);
@@ -148,7 +149,7 @@ unordered_set<pair<int, int>, pair_hash> sector_update(int p_id)
 	return serctorIndex;
 }
 
-void add_event(int obj, int target_id, OP_TYPE ev_t, int delay_ms)
+void add_event(int obj, int target_id, short x, short y, OP_TYPE ev_t, int delay_ms)
 {
 	using namespace chrono;
 	TIMER_EVENT ev;
@@ -156,6 +157,8 @@ void add_event(int obj, int target_id, OP_TYPE ev_t, int delay_ms)
 	ev.object = obj;
 	ev.start_time = system_clock::now() + milliseconds(delay_ms);
 	ev.target_id = target_id;
+	ev.x = x;
+	ev.y = y;
 	timer_l.lock();
 	timer_queue.push(ev);
 	timer_l.unlock();
@@ -165,8 +168,8 @@ void wake_up_npc(int npc_id)
 {
 	if ((*static_cast<NPC*>(objects[npc_id])).is_active == false) {
 		bool old_state = false;
-		if (atomic_compare_exchange_strong(&(*static_cast<NPC*>(objects[npc_id])).is_active, &old_state, true))
-			add_event(npc_id,-1, OP_RANDOM_MOVE, 1000);
+		atomic_compare_exchange_strong(&(*static_cast<NPC*>(objects[npc_id])).is_active, &old_state, true);
+			//add_event(npc_id,-1, 0,0,OP_RANDOM_MOVE, 1000);
 	}
 }
 
@@ -412,6 +415,14 @@ void do_move(int p_id, char dir)
 					send_move_packet(pl, p_id);
 				}
 			}
+			// npc와 player의 거리가 11보다 작을 때 chase
+			// state chase로 바꾸고 chase 시작
+			else {
+				if ((objects[pl]->x - objects[p_id]->x) * (objects[pl]->x - objects[p_id]->x)
+					+ (objects[pl]->y - objects[p_id]->y) * (objects[pl]->y - objects[p_id]->y) < 11 * 11) {
+						add_event(pl, p_id, 0,0, OP_CHASE, 0);
+				}
+			}
 		}
 	}
 
@@ -570,8 +581,7 @@ void disconnect(int p_id)
 	}
 }
 
-void do_npc_random_move(NPC& npc)
-{
+void do_npc_to_point(NPC& npc, const short x, const short y) {
 	unordered_set<int> old_vl;
 	auto serctorIndex = sector_update(npc.id);
 
@@ -583,19 +593,12 @@ void do_npc_random_move(NPC& npc)
 				old_vl.insert(objects[obj_id]->id);
 		}
 	}
-
-	int x = npc.x;
-	int y = npc.y;
-
-	switch (rand() % 4) {
-	case 0: if (x < (WORLD_WIDTH - 1) && can_move[y][x+1]) x++; break;
-	case 1: if (x > 0 && can_move[y][x-1]) x--; break;
-	case 2: if (y < (WORLD_HEIGHT - 1) && can_move[y+1][x]) y++; break;
-	case 3:if (y > 0 && can_move[y-1][x]) y--; break;
+	if (x > 0 && x < (WORLD_WIDTH - 1) && can_move[y][x]) {
+		npc.x = x;
 	}
-
-	npc.x = x;
-	npc.y = y;
+	if (y > 0 && y < (WORLD_HEIGHT - 1) && can_move[y][x]) {
+		npc.y = y;
+	}
 
 	serctorIndex = sector_update(npc.id);
 
@@ -641,6 +644,18 @@ void do_npc_random_move(NPC& npc)
 				player->m_vl.unlock();
 		}
 	}
+}
+
+void do_npc_random_move(NPC& npc)
+{
+	short x = npc.x, y = npc.y;
+	switch (rand() % 4) {
+	case 0:  x++; break;
+	case 1: x--; break;
+	case 2:  y++; break;
+	case 3:break;
+	}
+	do_npc_to_point(npc, x, y);
 }
 
 void worker(HANDLE h_iocp, SOCKET l_socket)
@@ -717,8 +732,8 @@ void worker(HANDLE h_iocp, SOCKET l_socket)
 		}
 			break;
 		case OP_RANDOM_MOVE:
-			do_npc_random_move(*static_cast<NPC*>(objects[key]));
-			add_event(key,-1, OP_RANDOM_MOVE, 1000);
+			//do_npc_random_move(*static_cast<NPC*>(objects[key]));
+			//add_event(key,-1, 0,0,OP_RANDOM_MOVE, 1000);
 			delete ex_over;
 			break;
 		case OP_RUNAWAY: {
@@ -732,7 +747,7 @@ void worker(HANDLE h_iocp, SOCKET l_socket)
 		case OP_ATTACK:
 			delete ex_over;
 			break;
-		case OP_PLAYER_APROACH:
+		case OP_PLAYER_APROACH: {
 			auto& npc = *static_cast<NPC*>(objects[key]);
 			npc.m_sl.lock();
 			int move_player = *reinterpret_cast<int*>( ex_over->m_packetbuf);
@@ -743,7 +758,58 @@ void worker(HANDLE h_iocp, SOCKET l_socket)
 			npc.m_sl.unlock();
 
 			delete ex_over;
+		}
 			break;
+		case OP_CHASE:
+		{
+			int player_id = *reinterpret_cast<int*>(ex_over->m_packetbuf);
+			short npcX = objects[key]->x, npcY = objects[key]->y;
+			short playerX = objects[player_id]->x, playerY = objects[player_id]->y;
+
+			const int mapMinX = min(npcX, playerX);
+			const int mapMinY = min(npcY, playerY);
+			const int sizeX = abs(npcX - playerX);
+			const int sizeY = abs(npcY - playerY);
+
+			
+			AStar::Generator generator;
+			// Set 2d map size.
+			generator.setWorldSize({ sizeX, sizeY });
+			cout << key<< "- size: " << sizeX << ", " << sizeY << endl;
+			// You can use a few heuristics : manhattan, euclidean or octagonal.
+			generator.setHeuristic(AStar::Heuristic::euclidean);
+			generator.setDiagonalMovement(true);
+
+			for (int i = mapMinY; i < mapMinY + sizeY; ++i) {
+				for (int n = mapMinX; n < mapMinX + sizeX; ++n) {
+					if (can_move[i][n] == false) {
+						generator.addCollision({ n - mapMinX , i - mapMinY });
+						cout << key << "- "<<n << ", " << i << endl;
+					}
+				}
+			}
+
+			// This method returns vector of coordinates from target to source.
+			auto path = generator.findPath({ playerX - mapMinX, playerY - mapMinY } ,{ npcX - mapMinX, npcY - mapMinY });
+
+			/*for (const auto& coord : path)
+			{
+				std::cout << coord.x << "," << coord.y << "\n";
+			}*/
+
+			// npc 움직임 구현
+			for (int i = 0; i < path.size(); ++i) {
+				cout << key << " - path: "<< path[i].x << ", " << path[i].y << endl;
+				add_event(key, -1, path[i].x+ mapMinX, path[i].y+ mapMinY, OP_POINT_MOVE, 500 * i);
+			}
+		}
+		break;
+		case OP_POINT_MOVE:
+		{
+			pair<short, short> xy = *reinterpret_cast<pair<short, short>*>(ex_over->m_packetbuf);
+			do_npc_to_point(*static_cast<NPC*>(objects[key]), xy.first, xy.second);
+		}
+		break;
 		}
 	}
 }
@@ -793,7 +859,19 @@ void do_timer()
 				*reinterpret_cast<int*>(ex_over->m_packetbuf) = ev.target_id;
 				PostQueuedCompletionStatus(h_iocp, 1, ev.object, &ex_over->m_over);
 			}
-			
+			else if (ev.e_type == OP_CHASE) {
+				EX_OVER* ex_over = new EX_OVER;
+				ex_over->m_op = OP_CHASE;
+				*reinterpret_cast<int*>(ex_over->m_packetbuf) = ev.target_id;
+				PostQueuedCompletionStatus(h_iocp, 1, ev.object, &ex_over->m_over);
+			}
+			else if (ev.e_type == OP_POINT_MOVE) {
+				EX_OVER* ex_over = new EX_OVER;
+				ex_over->m_op = OP_POINT_MOVE;
+				*reinterpret_cast<pair<short, short>*>(ex_over->m_packetbuf) = pair<short, short>(ev.x, ev.y);
+				PostQueuedCompletionStatus(h_iocp, 1, ev.object, &ex_over->m_over);
+			}
+
 		}
 		else {
 			timer_l.unlock();
@@ -823,9 +901,9 @@ int API_run_away(lua_State* L) {
 	int player_id = lua_tonumber(L, -1);
 	lua_pop(L, 3);
 
-	add_event(obj_id, -1, OP_RUNAWAY, 1000);
-	add_event(obj_id, -1, OP_RUNAWAY, 2000);
-	add_event(obj_id, player_id, OP_RUNAWAY, 3000);
+	add_event(obj_id, -1,0,0, OP_RUNAWAY, 1000);
+	add_event(obj_id, -1,0,0, OP_RUNAWAY, 2000);
+	add_event(obj_id, player_id,0,0, OP_RUNAWAY, 3000);
 	return 1;
 }
 
