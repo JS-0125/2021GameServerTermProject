@@ -30,9 +30,10 @@ constexpr int MAX_BUFFER = 1024;
 constexpr int SECTOR_RADIUS = 20;
 
 
-enum OP_TYPE  { OP_RECV, OP_SEND, OP_ACCEPT, OP_RANDOM_MOVE, OP_ATTACK, OP_PLAYER_APROACH, OP_RUNAWAY, OP_CHASE, OP_POINT_MOVE};
-enum PL_STATE { PLST_FREE, PLST_CONNECTED, PLST_INGAME };
 
+enum OP_TYPE  { OP_RECV, OP_SEND, OP_ACCEPT, OP_RANDOM_MOVE, OP_ATTACK, OP_PLAYER_APROACH, OP_RUNAWAY, OP_CHASE, OP_POINT_MOVE, OP_END_CHASE};
+enum PL_STATE { PLST_FREE, PLST_CONNECTED, PLST_INGAME , PLST_CHASING};
+enum OBJ_CLASS { PLAYER_CLASS, PEACE_CLASS, ARGO_CLASS};
 //enum DIRECTION { D_N, D_S, D_W, D_E, D_NO };
 
 struct EX_OVER
@@ -66,6 +67,7 @@ struct S_OBJECT
 	char m_name[MAX_ID_LEN];
 	short	x, y;
 	short sectorX, sectorY;
+	int	obj_class;
 };
 
 struct PLAYER : S_OBJECT {
@@ -116,8 +118,8 @@ unordered_set<pair<int, int>, pair_hash> sector_update(int p_id)
 	int sectorY = objects[p_id]->y / SECTOR_RADIUS, sectorX = objects[p_id]->x / SECTOR_RADIUS;
 
 	// sector update
+	sector[sectorY][sectorX].m_playerLock.lock();
 	if (sector[sectorY][sectorX].players.count(p_id) == 0) {
-		sector[sectorY][sectorX].m_playerLock.lock();
 		sector[sectorY][sectorX].players.insert(p_id);
 		sector[sectorY][sectorX].m_playerLock.unlock();
 
@@ -128,6 +130,8 @@ unordered_set<pair<int, int>, pair_hash> sector_update(int p_id)
 		objects[p_id]->sectorX = sectorX;
 		objects[p_id]->sectorY = sectorY;
 	}
+	else
+		sector[sectorY][sectorX].m_playerLock.unlock();
 
 	unordered_set<pair<int, int>, pair_hash> serctorIndex;
 	int x = objects[p_id]->x, y = objects[p_id]->y;
@@ -164,18 +168,18 @@ void add_event(int obj, int target_id, short x, short y, OP_TYPE ev_t, int delay
 	timer_l.unlock();
 }
 
-void wake_up_npc(int npc_id)
+bool wake_up_npc(int npc_id)
 {
 	if ((*static_cast<NPC*>(objects[npc_id])).is_active == false) {
 		bool old_state = false;
-		atomic_compare_exchange_strong(&(*static_cast<NPC*>(objects[npc_id])).is_active, &old_state, true);
-			//add_event(npc_id,-1, 0,0,OP_RANDOM_MOVE, 1000);
+		return atomic_compare_exchange_strong(&(*static_cast<NPC*>(objects[npc_id])).is_active, &old_state, true);
 	}
+	return false;
 }
 
 void put_sleep_npc(int npc_id)
 {
-	if ((*static_cast<NPC*>(objects[npc_id])).is_active == true) {
+	if ((*static_cast<NPC*>(objects[npc_id])).is_active == true && objects[npc_id]->obj_class == ARGO_CLASS) {
 		bool old_state = true;
 		atomic_compare_exchange_strong(&(*static_cast<NPC*>(objects[npc_id])).is_active, &old_state, false);
 			//add_event(npc_id, -1, OP_RANDOM_MOVE, 1000);
@@ -300,7 +304,7 @@ void send_add_object(int c_id, int p_id)
 	p.type = SC_ADD_OBJECT;
 	p.x = objects[p_id]->x;
 	p.y = objects[p_id]->y;
-	p.obj_class = 0;
+	p.obj_class = objects[p_id]->obj_class;
 	strcpy_s(p.name, objects[p_id]->m_name);
 	send_packet(c_id, &p);
 }
@@ -351,7 +355,8 @@ void do_move(int p_id, char dir)
 		for (auto& pl_id : sector[index.first][index.second].players) {
 			if (pl_id == p_id)
 				continue;
-			if (objects[pl_id]->m_state == PLST_INGAME && can_see(p_id, pl_id)) {
+			if (objects[pl_id]->m_state == PLST_INGAME && can_see(p_id, pl_id) ||
+				objects[pl_id]->m_state == PLST_CHASING && can_see(p_id, pl_id)) {
 				new_vl.insert(pl_id);
 				if (is_npc(pl_id)) {
 					EX_OVER* ex_over = new EX_OVER;
@@ -363,18 +368,6 @@ void do_move(int p_id, char dir)
 		}
 	}
 
-	/*for (auto& pl : objects) {
-		if (pl.id == p_id) continue;
-		if ((pl.m_state == PLST_INGAME) && can_see(p_id, pl.id)) {
-			new_vl.insert(pl.id);
-			if (is_npc(pl.id)) {
-				EX_OVER* ex_over = new EX_OVER;
-				ex_over->m_op = OP_PLAYER_APROACH;
-				*reinterpret_cast<int*> (ex_over->m_packetbuf) = p_id;
-				PostQueuedCompletionStatus(h_iocp, 1, pl.id, &ex_over->m_over);
-			}
-		}
-	}*/
 
 	send_move_packet(p_id, p_id);
 	for (auto pl : new_vl) {
@@ -398,7 +391,10 @@ void do_move(int p_id, char dir)
 					send_move_packet(pl, p_id);
 				}
 			}
-			else wake_up_npc(pl);
+			else {
+				if(objects[pl]->obj_class == ARGO_CLASS && wake_up_npc(pl))
+					add_event(pl, -1, -1, -1, OP_RANDOM_MOVE,1000);
+			}
 		}
 		else {		// 2. 기존 시야에도 있고 새 시야에도 있는 경우
 			if (false == is_npc(pl)) {
@@ -415,19 +411,12 @@ void do_move(int p_id, char dir)
 					send_move_packet(pl, p_id);
 				}
 			}
-			// npc와 player의 거리가 11보다 작을 때 chase
-			// state chase로 바꾸고 chase 시작
-			else {
-				if ((objects[pl]->x - objects[p_id]->x) * (objects[pl]->x - objects[p_id]->x)
-					+ (objects[pl]->y - objects[p_id]->y) * (objects[pl]->y - objects[p_id]->y) < 11 * 11) {
-						add_event(pl, p_id, 0,0, OP_CHASE, 0);
-				}
-			}
+			
 		}
 	}
 
 	for (auto pl : old_vl) {
-		if (0 == new_vl.count(pl)) {
+		if (0 == new_vl.count(pl) || new_vl.size() == 0) {
 			// 3. 시야에서 사라진 경우
 			player->m_vl.lock();
 			player->m_view_list.erase(pl);
@@ -446,9 +435,6 @@ void do_move(int p_id, char dir)
 				else {
 					otherPl->m_vl.unlock();
 				}
-			}
-			else {
-
 			}
 		}
 	}
@@ -515,29 +501,6 @@ void process_packet(int p_id, unsigned char* p_buf)
 				}
 			}
 		}
-
-		/*for (auto& pl : objects) {
-			if (p_id != pl.id) {
-				lock_guard <mutex> gl{ pl.m_slock };
-				if (PLST_INGAME == pl.m_state) {
-					if (can_see(p_id, pl.id)) {
-						objects[p_id].m_vl.lock();
-						objects[p_id].m_view_list.insert(pl.id);
-						objects[p_id].m_vl.unlock();
-						send_add_object(p_id, pl.id);
-						if (false == is_npc(pl.id)) {
-							objects[pl.id].m_vl.lock();
-							objects[pl.id].m_view_list.insert(p_id);
-							objects[pl.id].m_vl.unlock();
-							send_add_object(pl.id, p_id);
-						}
-						else {
-							wake_up_npc(pl.id);
-						}
-					}
-				}
-			}
-		}*/
 	}
 		break;
 	case CS_MOVE: {
@@ -593,12 +556,12 @@ void do_npc_to_point(NPC& npc, const short x, const short y) {
 				old_vl.insert(objects[obj_id]->id);
 		}
 	}
-	if (x > 0 && x < (WORLD_WIDTH - 1) && can_move[y][x]) {
+
+	if (x > 0 && x < (WORLD_WIDTH - 1) && can_move[y][x]) 
 		npc.x = x;
-	}
-	if (y > 0 && y < (WORLD_HEIGHT - 1) && can_move[y][x]) {
+	if (y > 0 && y < (WORLD_HEIGHT - 1) && can_move[y][x]) 
 		npc.y = y;
-	}
+	
 
 	serctorIndex = sector_update(npc.id);
 
@@ -621,29 +584,54 @@ void do_npc_to_point(NPC& npc, const short x, const short y) {
 			player->m_view_list.insert(npc.id);
 			player->m_vl.unlock();
 			send_add_object(p_id, npc.id);
-
 		}
 		else {
 			// 플레이어가 계속 보고 있음
+
+			// npc와 player의 거리가 5.5보다 작을 때 chase
+			// state chase로 바꾸고 chase 시작
+			if ((objects[npc.id]->x - objects[p_id]->x) * (objects[npc.id]->x - objects[p_id]->x)
+				+ (objects[npc.id]->y - objects[p_id]->y) * (objects[npc.id]->y - objects[p_id]->y) < 5.5 * 5.5
+				&& objects[npc.id]->obj_class == ARGO_CLASS
+				&& objects[npc.id]->m_state == PL_STATE::PLST_INGAME) {
+				objects[npc.id]->m_state = PL_STATE::PLST_CHASING;
+				add_event(npc.id, p_id, 0, 0, OP_CHASE, 0);
+			}
+			// 거리가 멀어지면 InGame state
+			if ((objects[npc.id]->x - objects[p_id]->x) * (objects[npc.id]->x - objects[p_id]->x)
+				+ (objects[npc.id]->y - objects[p_id]->y) * (objects[npc.id]->y - objects[p_id]->y) > 5.5 * 5.5
+				&& objects[npc.id]->obj_class == ARGO_CLASS
+				&& objects[npc.id]->m_state == PL_STATE::PLST_CHASING) {
+				objects[npc.id]->m_state = PL_STATE::PLST_INGAME;
+			}
+			// ARGO이고 InGame이면 random move
+			if (objects[npc.id]->obj_class == ARGO_CLASS && objects[npc.id]->m_state == PL_STATE::PLST_INGAME 
+				&& static_cast<NPC*>(objects[p_id])->is_active) {
+				add_event(npc.id, p_id, -1, -1, OP_RANDOM_MOVE, 1000);
+			}
+
 			send_move_packet(p_id, npc.id);
 		}
 	}
 
 
 	for (auto& p_id : old_vl) {
-		if (new_vl.count(p_id) == 0) {
+		if (new_vl.count(p_id) == 0 || new_vl.size() == 0) {
 			PLAYER* player = static_cast<PLAYER*>(objects[p_id]);
 
 			player->m_vl.lock();
 			if (player->m_view_list.count(p_id) != 0) {
 				player->m_view_list.erase(npc.id);
 				player->m_vl.unlock();
-				send_remove_object(p_id, npc.id);
+				send_remove_object(p_id, npc.id);	
 			}
 			else
 				player->m_vl.unlock();
 		}
 	}
+
+	if (new_vl.size() == 0)
+		put_sleep_npc(npc.id);
 }
 
 void do_npc_random_move(NPC& npc)
@@ -732,7 +720,7 @@ void worker(HANDLE h_iocp, SOCKET l_socket)
 		}
 			break;
 		case OP_RANDOM_MOVE:
-			//do_npc_random_move(*static_cast<NPC*>(objects[key]));
+			do_npc_random_move(*static_cast<NPC*>(objects[key]));
 			//add_event(key,-1, 0,0,OP_RANDOM_MOVE, 1000);
 			delete ex_over;
 			break;
@@ -768,24 +756,22 @@ void worker(HANDLE h_iocp, SOCKET l_socket)
 
 			const int mapMinX = min(npcX, playerX);
 			const int mapMinY = min(npcY, playerY);
-			const int sizeX = abs(npcX - playerX);
-			const int sizeY = abs(npcY - playerY);
+			const int sizeX = abs(npcX - playerX)+1;
+			const int sizeY = abs(npcY - playerY)+1;
 
 			
 			AStar::Generator generator;
-			// Set 2d map size.
+			// 찾을 범위 설정
 			generator.setWorldSize({ sizeX, sizeY });
-			cout << key<< "- size: " << sizeX << ", " << sizeY << endl;
+			// cout << key<< "- size: " << sizeX << ", " << sizeY << endl;
 			// You can use a few heuristics : manhattan, euclidean or octagonal.
 			generator.setHeuristic(AStar::Heuristic::euclidean);
 			generator.setDiagonalMovement(true);
 
 			for (int i = mapMinY; i < mapMinY + sizeY; ++i) {
 				for (int n = mapMinX; n < mapMinX + sizeX; ++n) {
-					if (can_move[i][n] == false) {
+					if (can_move[i][n] == false) 
 						generator.addCollision({ n - mapMinX , i - mapMinY });
-						cout << key << "- "<<n << ", " << i << endl;
-					}
 				}
 			}
 
@@ -798,10 +784,10 @@ void worker(HANDLE h_iocp, SOCKET l_socket)
 			}*/
 
 			// npc 움직임 구현
-			for (int i = 0; i < path.size(); ++i) {
-				cout << key << " - path: "<< path[i].x << ", " << path[i].y << endl;
-				add_event(key, -1, path[i].x+ mapMinX, path[i].y+ mapMinY, OP_POINT_MOVE, 500 * i);
-			}
+			for (int i = 0; i < path.size(); ++i) 
+				add_event(key, -1, path[i].x + mapMinX, path[i].y + mapMinY, OP_POINT_MOVE, 1000 * i);
+			add_event(key, -1,0, 0, OP_END_CHASE, 1000 * path.size());
+
 		}
 		break;
 		case OP_POINT_MOVE:
@@ -810,32 +796,16 @@ void worker(HANDLE h_iocp, SOCKET l_socket)
 			do_npc_to_point(*static_cast<NPC*>(objects[key]), xy.first, xy.second);
 		}
 		break;
+		case OP_END_CHASE:
+		{
+			objects[key]->m_state = PLST_INGAME;
+			do_npc_to_point(*static_cast<NPC*>(objects[key]), objects[key]->x, objects[key]->y);
+		}
+		break;
 		}
 	}
 }
 
-/*
-void do_ai()
-{
-	using namespace chrono;
-
-	for (;;) {
-		auto start_t = chrono::system_clock::now();
-		for (auto& npc : objects) {
-			if (true == is_npc(npc.id)) {
-				do_npc_random_move(npc);
-			}
-		}
-		auto end_t = chrono::system_clock::now();
-		auto ai_time = end_t - start_t;
-		cout << "AI Exec Time : "
-			<< duration_cast<milliseconds>(ai_time).count()
-			<< "ms.\n";
-		if (end_t < start_t + 1s)
-			this_thread::sleep_for(start_t + 1s - end_t);
-	}
-}
-*/
 
 void do_timer()
 {
@@ -871,7 +841,11 @@ void do_timer()
 				*reinterpret_cast<pair<short, short>*>(ex_over->m_packetbuf) = pair<short, short>(ev.x, ev.y);
 				PostQueuedCompletionStatus(h_iocp, 1, ev.object, &ex_over->m_over);
 			}
-
+			else if (ev.e_type == OP_END_CHASE) {
+				EX_OVER* ex_over = new EX_OVER;
+				ex_over->m_op = OP_END_CHASE;
+				PostQueuedCompletionStatus(h_iocp, 1, ev.object, &ex_over->m_over);
+			}
 		}
 		else {
 			timer_l.unlock();
@@ -962,7 +936,18 @@ int main()
 			sector[sectorY][sectorX].m_playerLock.lock();
 			sector[sectorY][sectorX].players.insert(pl->id);
 			sector[sectorY][sectorX].m_playerLock.unlock();
-
+			switch (rand()%3)
+			{
+			case 0:
+			case 1:
+				pl->obj_class = PEACE_CLASS;
+				break;
+			case 2:
+				pl->obj_class = ARGO_CLASS;
+				break;
+			default:
+				break;
+			}
 			// 가상머신 자료구조
 			lua_State* L = (*static_cast<NPC*>(pl)).L = luaL_newstate();
 			// 기본 라이브러리 로딩
@@ -988,6 +973,7 @@ int main()
 			auto& pl = objects[i] = new PLAYER;
 			pl->id = i;
 			pl->m_state = PLST_FREE;
+			pl->obj_class = PLAYER_CLASS;
 		}
 	}
 	cout << "초기화 완료" << endl;
