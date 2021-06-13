@@ -10,7 +10,7 @@ constexpr int NPC_ID_START = 10000;		// NPC의 ID가 시작하는 지점, 따라서 플레이�
 #define WORLD_WIDTH	2000
 #define WORLD_HEIGHT	2000
 
-	
+
 #define VIEW_RADIUS		7
 
 #define SERVER_PORT		3500

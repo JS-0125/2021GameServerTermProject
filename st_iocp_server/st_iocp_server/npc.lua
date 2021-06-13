@@ -1,7 +1,4 @@
 myid = -1
-scoreF = {}
-scoreG = {}
-scoreH = {}
 
 function set_uid(x)
 	myid = x;
@@ -16,7 +13,7 @@ function event_player_move(player)
 	if (player_x == my_x) then
 		if (player_y == my_y) then
 			API_SendMessage(myid, player, "HELLO");
-			API_run_away(myid, player)
+			
 		end
 	end
 end

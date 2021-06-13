@@ -1,72 +1,136 @@
-/*
-    Copyright (c) 2015, Damian Barczynski <daan.net@wp.eu>
-    Following tool is licensed under the terms and conditions of the ISC license.
-    For more information visit https://opensource.org/licenses/ISC.
-*/
-#ifndef __ASTAR_HPP_8F637DB91972F6C878D41D63F7E7214F__
-#define __ASTAR_HPP_8F637DB91972F6C878D41D63F7E7214F__
-
+#include <list>
 #include <vector>
-#include <functional>
-#include <set>
+#include <iostream>
 
-namespace AStar
-{
-    struct Vec2i
-    {
-        int x, y;
+using namespace std;
 
-        bool operator == (const Vec2i& coordinates_);
-    };
+class point {
+public:
+    point(int a = 0, int b = 0) { x = a; y = b; }
+    bool operator ==(const point& o) { return o.x == x && o.y == y; }
+    point operator +(const point& o) { return point(o.x + x, o.y + y); }
+    int x, y;
+};
 
-    using uint = unsigned int;
-    using HeuristicFunction = std::function<uint(Vec2i, Vec2i)>;
-    using CoordinateList = std::vector<Vec2i>;
+class Map {
+public:
+    int w, h;
+    vector<vector<bool>> m;
 
-    struct Node
-    {
-        uint G, H;
-        Vec2i coordinates;
-        Node *parent;
+    Map() {}
+    Map(int width, int height) {
+        w = width;
+        h = height;
+        m.resize(height);
+    }
+    bool operator() (int x, int y) { return m[y][x]; }
+};
 
-        Node(Vec2i coord_, Node *parent_ = nullptr);
-        uint getScore();
-    };
+class node {
+public:
+    bool operator == (const node& o) { return pos == o.pos; }
+    bool operator == (const point& o) { return pos == o; }
+    bool operator < (const node& o) { return dist + cost < o.dist + o.cost; }
+    point pos, parent;
+    int dist, cost;
+};
 
-    using NodeSet = std::vector<Node*>;
+class aStar {
+public:
+    Map m;
+    point end, start;
+    point neighbours[8];
+    std::list<node> open;
+    std::list<node> closed;
 
-    class Generator
-    {
-        bool detectCollision(Vec2i coordinates_);
-        Node* findNodeOnList(NodeSet& nodes_, Vec2i coordinates_);
-        void releaseNodes(NodeSet& nodes_);
+    aStar() {
+        neighbours[0] = point(-1, -1); neighbours[1] = point(1, -1);
+        neighbours[2] = point(-1, 1); neighbours[3] = point(1, 1);
+        neighbours[4] = point(0, -1); neighbours[5] = point(-1, 0);
+        neighbours[6] = point(0, 1); neighbours[7] = point(1, 0);
+    }
 
-    public:
-        Generator();
-        void setWorldSize(Vec2i worldSize_);
-        void setDiagonalMovement(bool enable_);
-        void setHeuristic(HeuristicFunction heuristic_);
-        CoordinateList findPath(Vec2i source_, Vec2i target_);
-        void addCollision(Vec2i coordinates_);
-        void removeCollision(Vec2i coordinates_);
-        void clearCollisions();
+    int calcDist(point& p) {
+        // need a better heuristic
+        int x = end.x - p.x, y = end.y - p.y;
+        return(x * x + y * y);
+    }
 
-    private:
-        HeuristicFunction heuristic;
-        CoordinateList direction, walls;
-        Vec2i worldSize;
-        uint directions;
-    };
+    bool isValid(point& p) {
+        return (p.x > -1 && p.y > -1 && p.x < m.w&& p.y < m.h);
+    }
 
-    class Heuristic
-    {
-        static Vec2i getDelta(Vec2i source_, Vec2i target_);
+    bool existPoint(point& p, int cost) {
+        std::list<node>::iterator i;
+        i = std::find(closed.begin(), closed.end(), p);
+        if (i != closed.end()) {
+            if ((*i).cost + (*i).dist < cost) return true;
+            else { closed.erase(i); return false; }
+        }
+        i = std::find(open.begin(), open.end(), p);
+        if (i != open.end()) {
+            if ((*i).cost + (*i).dist < cost) return true;
+            else { open.erase(i); return false; }
+        }
+        return false;
+    }
 
-    public:
-        static uint manhattan(Vec2i source_, Vec2i target_);
-        static uint euclidean(Vec2i source_, Vec2i target_);
-        static uint octagonal(Vec2i source_, Vec2i target_);
-    };
-}
+    bool fillOpen(node& n) {
+        int stepCost, nc, dist;
+        point neighbour;
 
-#endif // __ASTAR_HPP_8F637DB91972F6C878D41D63F7E7214F__
+        for (int x = 0; x < 8; x++) {
+            // one can make diagonals have different cost
+            stepCost = x < 4 ? 1 : 1;
+            neighbour = n.pos + neighbours[x];
+            if (neighbour == end) return true;
+
+            if (isValid(neighbour)) {
+				if (m(neighbour.x, neighbour.y) == true) {
+					nc = stepCost + n.cost;
+					dist = calcDist(neighbour);
+					if (!existPoint(neighbour, nc + dist)) {
+						node t;
+						t.cost = nc; t.dist = dist;
+						t.pos = neighbour;
+						t.parent = n.pos;
+						open.push_back(t);
+					}
+				}
+            }
+        }
+        return false;
+    }
+
+    bool search(point& s, point& e, Map& mp) {
+        node n; end = e; start = s; m = mp;
+        n.cost = 0; n.pos = s; n.parent = 0; n.dist = calcDist(s);
+        open.push_back(n);
+        while (!open.empty()) {
+            //open.sort();
+            node n = open.front();
+            open.pop_front();
+            closed.push_back(n);
+            if (fillOpen(n)) return true;
+        }
+        return false;
+    }
+
+    int path(std::list<point>& path) {
+        path.push_front(end);
+        int cost = 1 + closed.back().cost;
+        path.push_front(closed.back().pos);
+        point parent = closed.back().parent;
+
+        for (std::list<node>::reverse_iterator i = closed.rbegin(); i != closed.rend(); i++) {
+            if ((*i).pos == parent && !((*i).pos == start)) {
+                path.push_front((*i).pos);
+                parent = (*i).parent;
+            }
+        }
+        path.push_front(start);
+        path.reverse();
+        return cost;
+    }
+
+};
