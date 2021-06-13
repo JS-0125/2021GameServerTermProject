@@ -139,11 +139,14 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="GameDatabase.cpp" />
     <ClCompile Include="iocp_main.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="2021_텀프_protocol.h" />
     <ClInclude Include="AStar.h" />
+    <ClInclude Include="default.h" />
+    <ClInclude Include="GameDatabase.h" />
     <ClInclude Include="lauxlib.h" />
     <ClInclude Include="lua.h" />
     <ClInclude Include="luaconf.h" />

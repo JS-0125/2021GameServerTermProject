@@ -1,13 +1,8 @@
-#include <unordered_set>
-#include <thread>
-#include <mutex>
-#include <array>
-#include <queue>
-#include<atomic>
-#include<fstream>
-#include"AStar.h"
 #include <WS2tcpip.h>
 #include <MSWSock.h>
+#include"default.h"
+#include"AStar.h"
+#include"GameDatabase.h"
 
 using namespace std;
 
@@ -114,6 +109,7 @@ constexpr int SERVER_ID = 0;
 HANDLE h_iocp;
 
 vector<vector<bool>> can_move;
+GameDatabase *gameDatabase;
 
 unordered_set<pair<int, int>, pair_hash> sector_update(int p_id)
 {
@@ -889,6 +885,7 @@ int main()
 			cout << n << " ";
 	}*/
 
+	gameDatabase = new GameDatabase();
 
 	for (int i = 0; i < MAX_USER + 1; ++i) {
 		if (is_npc(i) == true) {

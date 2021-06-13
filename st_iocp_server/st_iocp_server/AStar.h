@@ -1,6 +1,6 @@
+#pragma once
+#include"default.h"
 #include <list>
-#include <vector>
-#include <iostream>
 
 using namespace std;
 
