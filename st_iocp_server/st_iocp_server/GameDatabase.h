@@ -2,6 +2,7 @@
 #include"default.h"
 #include <windows.h>  
 #include <string>
+#include <atlstr.h>
 #include"2021_ерга_protocol.h"
 
 #define UNICODE  
@@ -51,6 +52,15 @@ public:
     }
 
 	~GameDatabase() {
+        //// Process data  
+        //if (retcode == SQL_SUCCESS || retcode == SQL_SUCCESS_WITH_INFO) {
+        //    SQLCancel(hstmt);
+        //    SQLFreeHandle(SQL_HANDLE_STMT, hstmt);
+        //}
+
+		SQLCancel(hstmt);
+		SQLFreeHandle(SQL_HANDLE_STMT, hstmt);
+
 		SQLDisconnect(hdbc);
 		SQLFreeHandle(SQL_HANDLE_DBC, hdbc);
 		SQLFreeHandle(SQL_HANDLE_ENV, henv);
@@ -75,48 +85,94 @@ public:
         }
     }
 
-    bool IdCheck(int id) {
+    bool IdCheck(char* id) {
         SQLRETURN retcode;
 
-        SQLINTEGER nCharId;
+        //SQLINTEGER nCharId;
+        SQLWCHAR nCharId[MAX_ID_LEN];
         SQLLEN  cbCharID = 0;
-        char  buf[255];
-        wchar_t sql_data[255];
 
-        sprintf_s(buf, "EXEC select_id %d", id);
-        MultiByteToWideChar(CP_UTF8, 0, buf, strlen(buf), sql_data, sizeof sql_data / sizeof * sql_data);
-        sql_data[strlen(buf)] = '\0';
+        CString str;
+        str.Format(L"EXEC select_id %s", (CString)id);
 
-        retcode = SQLExecDirect(hstmt, sql_data, SQL_NTS);
-        if (retcode == SQL_SUCCESS || retcode == SQL_SUCCESS_WITH_INFO) {
-            cout << "select id ok" << endl;
+        if (SQL_SUCCESS == SQLAllocHandle(SQL_HANDLE_STMT, hdbc, &hstmt)) {
+            retcode = SQLExecDirect(hstmt, (SQLWCHAR*)(const wchar_t*)str, SQL_NTS);
+            if (retcode == SQL_SUCCESS || retcode == SQL_SUCCESS_WITH_INFO) {
+                //cout << "select id ok" << endl;
 
-            // Bind columns 1
-            retcode = SQLBindCol(hstmt, 1, SQL_C_ULONG, &nCharId, 100, &cbCharID);
+                // Bind columns 1
+                retcode = SQLBindCol(hstmt, 1, SQL_C_WCHAR, &nCharId, MAX_ID_LEN, &cbCharID);
 
-            // Fetch and print each row of data. On an error, display a message and exit.  
-            for (int i = 0; ; i++) {
-                retcode = SQLFetch(hstmt);
-                if (retcode == SQL_ERROR || retcode == SQL_SUCCESS_WITH_INFO) {
-                    HandleDiagnosticRecord(hstmt, SQL_HANDLE_STMT, retcode);
-                    //break;
+                // Fetch and print each row of data. On an error, display a message and exit.  
+                for (int i = 0; ; i++) {
+                    retcode = SQLFetch(hstmt);
+                    if (retcode == SQL_ERROR || retcode == SQL_SUCCESS_WITH_INFO) {
+                        HandleDiagnosticRecord(hstmt, SQL_HANDLE_STMT, retcode);
+                        //break;
+                    }
+                    if (retcode == SQL_SUCCESS || retcode == SQL_SUCCESS_WITH_INFO)
+                    {
+                        if (strcmp((char*)nCharId, id))
+                            return true;
+                        return false;
+                    }
+                    else {
+                        break;  // end of data
+                    }
                 }
-                if (retcode == SQL_SUCCESS || retcode == SQL_SUCCESS_WITH_INFO)
-                {
-                    if (nCharId == id)
-                        return true;
-                    return false;
+				if (retcode == SQL_SUCCESS || retcode == SQL_SUCCESS_WITH_INFO) {
+					SQLCancel(hstmt);
+					SQLFreeHandle(SQL_HANDLE_STMT, hstmt);
+				}
+            }
+        }
+        
+        return false;
+    }
+
+    bool addID(char* id) {
+        SQLRETURN retcode;
+
+        //SQLINTEGER nCharId;
+        SQLWCHAR nCharId[MAX_ID_LEN];
+        SQLLEN  cbCharID = 0;
+
+        CString str;
+        str.Format(L"EXEC insert_id %s", (CString)id);
+
+        if (SQL_SUCCESS == SQLAllocHandle(SQL_HANDLE_STMT, hdbc, &hstmt)) {
+            retcode = SQLExecDirect(hstmt, (SQLWCHAR*)(const wchar_t*)str, SQL_NTS);
+            if (retcode == SQL_SUCCESS || retcode == SQL_SUCCESS_WITH_INFO) {
+                //cout << "insert id ok" << endl;
+
+                // Bind columns 1
+                retcode = SQLBindCol(hstmt, 1, SQL_C_WCHAR, &nCharId, MAX_ID_LEN, &cbCharID);
+
+                // Fetch and print each row of data. On an error, display a message and exit.  
+                for (int i = 0; ; i++) {
+                    retcode = SQLFetch(hstmt);
+                    if (retcode == SQL_ERROR || retcode == SQL_SUCCESS_WITH_INFO) {
+                        HandleDiagnosticRecord(hstmt, SQL_HANDLE_STMT, retcode);
+                        //break;
+                    }
+                    if (retcode == SQL_SUCCESS || retcode == SQL_SUCCESS_WITH_INFO)
+                    {
+                        if (strcmp((char*)nCharId, id))
+                            return true;
+                        return false;
+                    }
+                    else {
+                        break;  // end of data
+                    }
                 }
-                else
-                    break;  // end of data
+
+                if (retcode == SQL_SUCCESS || retcode == SQL_SUCCESS_WITH_INFO) {
+                    SQLCancel(hstmt);
+                    SQLFreeHandle(SQL_HANDLE_STMT, hstmt);
+                }
             }
         }
 
-        // Process data  
-        if (retcode == SQL_SUCCESS || retcode == SQL_SUCCESS_WITH_INFO) {
-            SQLCancel(hstmt);
-            SQLFreeHandle(SQL_HANDLE_STMT, hstmt);
-        }
         return false;
     }
 };

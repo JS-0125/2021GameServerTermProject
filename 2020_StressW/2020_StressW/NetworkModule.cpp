@@ -330,7 +330,6 @@ void Adjust_Number_Of_Client()
 	l_packet.type = CS_LOGIN;
 	SendPacket(num_connections, &l_packet);
 
-
 	int ret = WSARecv(g_clients[num_connections].client_socket, &g_clients[num_connections].recv_over.wsabuf, 1,
 		NULL, &recv_flag, &g_clients[num_connections].recv_over.over, NULL);
 	if (SOCKET_ERROR == ret) {
@@ -350,7 +349,7 @@ fail_to_connect:
 void Test_Thread()
 {
 	while (true) {
-		Sleep(max(20, global_delay));
+		Sleep(max(50, global_delay));
 		// Á¢¼Ó
 		Adjust_Number_Of_Client();
 

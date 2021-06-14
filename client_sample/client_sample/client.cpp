@@ -160,6 +160,7 @@ void ProcessPacket(char* ptr)
 		g_myid = packet->id;
 		avatar.m_x = packet->x;
 		avatar.m_y = packet->y;
+
 		//avatar.set_name(packet->name);
 		g_left_x = packet->x - SCREEN_WIDTH / 2;
 		g_top_y = packet->y - SCREEN_HEIGHT / 2;
@@ -320,7 +321,7 @@ void send_login_packet(string &name)
 	cs_packet_login packet;
 	packet.size = sizeof(packet);
 	packet.type = CS_LOGIN;
-	//strcpy_s(packet.name, name.c_str());
+	strcpy_s(packet.player_id, name.c_str());
 	size_t sent = 0;
 	socket.send(&packet, sizeof(packet), sent);
 }
@@ -337,14 +338,14 @@ int main()
 		while (true);
 	}
 
+	cout << "id를 입력하세요: ";
+	string id;
+	cin >> id;
+	send_login_packet(id);
+	avatar.set_name(id.c_str());
+
 	client_initialize();
-	string name{ "PL" };
-	int tt = chrono::duration_cast<chrono::milliseconds>
-		(chrono::system_clock::now().
-			time_since_epoch()).count();
-	name += to_string(tt % 1000);
-	send_login_packet(name);	
-	avatar.set_name(name.c_str());
+
 	sf::RenderWindow window(sf::VideoMode(WINDOW_WIDTH, WINDOW_HEIGHT), "2D CLIENT");
 	g_window = &window;
 

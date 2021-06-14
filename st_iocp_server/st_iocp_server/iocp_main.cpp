@@ -5,6 +5,7 @@
 #include"GameDatabase.h"
 
 using namespace std;
+using namespace concurrency;
 
 extern "C" {
 #include"lua.h"
@@ -29,15 +30,6 @@ enum OBJ_CLASS { PLAYER_CLASS, ARGO_CLASS, PEACE_CLASS };
 enum NPC_STATE {NPC_RANDOM_MOVE, NPC_ATTACK, NPC_STAY, NPC_CHASE};
 //enum DIRECTION { D_N, D_S, D_W, D_E, D_NO };
 
-struct EX_OVER
-{
-	WSAOVERLAPPED	m_over;
-	WSABUF			m_wsabuf[1];
-	unsigned char	m_packetbuf[MAX_BUFFER];
-	OP_TYPE			m_op;
-	SOCKET			m_csocket;					// OP_ACCEPT에서만 사용
-};
-
 struct TIMER_EVENT {
 	int object;
 	OP_TYPE e_type;
@@ -50,6 +42,19 @@ struct TIMER_EVENT {
 	}
 };
 
+struct LOGIN_EVENT {
+	char charId[MAX_ID_LEN];
+	int id;
+};
+
+struct EX_OVER
+{
+	WSAOVERLAPPED	m_over;
+	WSABUF			m_wsabuf[1];
+	unsigned char	m_packetbuf[MAX_BUFFER];
+	OP_TYPE			m_op;
+	SOCKET			m_csocket;					// OP_ACCEPT에서만 사용
+};
 
 struct S_OBJECT
 {
@@ -101,6 +106,8 @@ struct pair_hash
 
 priority_queue <TIMER_EVENT> timer_queue;
 mutex timer_l;
+
+concurrent_queue<LOGIN_EVENT> login_queue;
 
 Sector sector[WORLD_HEIGHT / SECTOR_RADIUS][WORLD_WIDTH / SECTOR_RADIUS];
 array <S_OBJECT*, MAX_USER + 1> objects;
@@ -488,59 +495,10 @@ void process_packet(int p_id, unsigned char* p_buf)
 	switch (p_buf[1]) {
 	case CS_LOGIN: {
 		cs_packet_login* packet = reinterpret_cast<cs_packet_login*>(p_buf);
-		send_login_ok_packet(p_id);
-		objects[p_id]->m_state = PLST_INGAME;
-
-		// sector
-		int sectorX = objects[p_id]->x / SECTOR_RADIUS;
-		int sectorY = objects[p_id]->y / SECTOR_RADIUS;
-		objects[p_id]->sectorX = sectorX;
-		objects[p_id]->sectorY = sectorY;
-
-		sector[sectorY][sectorX].m_playerLock.lock();
-		sector[sectorY][sectorX].players.insert(p_id);
-		sector[sectorY][sectorX].m_playerLock.unlock();
-
-		auto serctorIndex = sector_update(p_id);
-
-		for (auto& index : serctorIndex) {
-			//sector[index.first][index.second].m_playerLock.lock();
-			for (auto& pl_id : sector[index.first][index.second].players) {
-				if (p_id != pl_id) {
-					if (PLST_INGAME == objects[pl_id]->m_state) {
-						if (can_see(p_id, pl_id))
-						{
-							// 다른 플레이어가 시야 안에 있을 때
-							if (is_npc(pl_id) == false) {
-								// player
-								PLAYER* player = static_cast<PLAYER*>(objects[p_id]);
-
-								player->m_vl.lock();
-								player->m_view_list.insert(pl_id);
-								player->m_vl.unlock();
-								send_add_object(p_id, pl_id);
-
-								// 다른 플레이어
-								PLAYER* otherPl = static_cast<PLAYER*>(objects[pl_id]);
-
-								otherPl->m_vl.lock();
-								otherPl->m_view_list.insert(p_id);
-								otherPl->m_vl.unlock();
-								send_add_object(pl_id, p_id);
-							}
-							// npc일 때
-							else {
-								// 시야 안에 있는 npc 깨우기
-								if(objects[pl_id]->obj_class == ARGO_CLASS)
-									wake_up_npc(pl_id);
-								// player에게 npc 전송
-								send_add_object(p_id, pl_id);
-							}
-						}
-					}
-				}
-			}
-		}
+		LOGIN_EVENT ev;
+		sprintf_s(ev.charId, packet->player_id);
+		ev.id = p_id;
+		login_queue.push(ev);
 	}
 				 break;
 	case CS_MOVE: {
@@ -805,6 +763,80 @@ void worker(HANDLE h_iocp, SOCKET l_socket)
 	}
 }
 
+void do_login() {
+	for (;;) {
+		if (!login_queue.empty()) {
+			LOGIN_EVENT login_ev;
+			if (login_queue.try_pop(login_ev)) {
+				int p_id = login_ev.id;
+				if (gameDatabase->IdCheck(login_ev.charId)) {
+					send_login_ok_packet(p_id);
+				}
+				else {
+					if (gameDatabase->addID(login_ev.charId))
+						send_login_ok_packet(p_id);
+					else
+						disconnect(p_id);
+				}
+
+				objects[p_id]->m_state = PLST_INGAME;
+
+				// sector
+				int sectorX = objects[p_id]->x / SECTOR_RADIUS;
+				int sectorY = objects[p_id]->y / SECTOR_RADIUS;
+				objects[p_id]->sectorX = sectorX;
+				objects[p_id]->sectorY = sectorY;
+
+				sector[sectorY][sectorX].m_playerLock.lock();
+				sector[sectorY][sectorX].players.insert(p_id);
+				sector[sectorY][sectorX].m_playerLock.unlock();
+
+				auto serctorIndex = sector_update(p_id);
+
+				for (auto& index : serctorIndex) {
+					//sector[index.first][index.second].m_playerLock.lock();
+					for (auto& pl_id : sector[index.first][index.second].players) {
+						if (p_id != pl_id) {
+							if (PLST_INGAME == objects[pl_id]->m_state) {
+								if (can_see(p_id, pl_id))
+								{
+									// 다른 플레이어가 시야 안에 있을 때
+									if (is_npc(pl_id) == false) {
+										// player
+										PLAYER* player = static_cast<PLAYER*>(objects[p_id]);
+
+										player->m_vl.lock();
+										player->m_view_list.insert(pl_id);
+										player->m_vl.unlock();
+										send_add_object(p_id, pl_id);
+
+										// 다른 플레이어
+										PLAYER* otherPl = static_cast<PLAYER*>(objects[pl_id]);
+
+										otherPl->m_vl.lock();
+										otherPl->m_view_list.insert(p_id);
+										otherPl->m_vl.unlock();
+										send_add_object(pl_id, p_id);
+									}
+									// npc일 때
+									else {
+										// 시야 안에 있는 npc 깨우기
+										if (objects[pl_id]->obj_class == ARGO_CLASS)
+											wake_up_npc(pl_id);
+										// player에게 npc 전송
+										send_add_object(p_id, pl_id);
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+		else{ this_thread::sleep_for(10ms); }
+	}
+}
+
 void do_timer()
 {
 	using namespace chrono;
@@ -885,7 +917,18 @@ int main()
 			cout << n << " ";
 	}*/
 
+	//database set
 	gameDatabase = new GameDatabase();
+
+	/*if (gameDatabase->IdCheck((char*)"may"))
+		cout << "okokok" << endl;
+	else {
+		cout << "뭐" << endl;
+		if (gameDatabase->addID((char*)"may"))
+			cout << "hey 추가 성공" << endl;
+		else
+			cout << "ㅜㅜ" << endl;
+	}*/
 
 	for (int i = 0; i < MAX_USER + 1; ++i) {
 		if (is_npc(i) == true) {
@@ -996,7 +1039,10 @@ int main()
 	//ai_thread.join();
 
 	thread timer_thread{ do_timer };
+	thread login_thread{ do_login };
+
 	timer_thread.join();
+	login_thread.join();
 
 	for (auto& th : worker_threads)
 		th.join();
