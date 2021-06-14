@@ -133,12 +133,14 @@ public:
 							}
 							p.LEVEL = 1;
 							p.EXP = 0;
+							p.HP = 100;
 						}
 						else {
 							p.x = nCharX;
 							p.y = nCharY;
 							p.LEVEL = nCharLevel;
 							p.EXP = nCharExp;
+							p.HP = 100;
 						}
 						returnValue = true;
 					}
@@ -202,12 +204,14 @@ public:
 							}
 							p.LEVEL = 1;
 							p.EXP = 0;
+							p.HP = 100;
 						}
 						else {
 							p.x = nCharX;
 							p.y = nCharY;
 							p.LEVEL = nCharLevel;
 							p.EXP = nCharExp;
+							p.HP = 100;
 						}
 						returnValue = true;
 					}

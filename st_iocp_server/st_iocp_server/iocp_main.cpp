@@ -271,7 +271,7 @@ void send_login_ok_packet(int p_id, sc_packet_login_ok p)
 	objects[p_id]->exp = p.EXP;
 	objects[p_id]->x = p.x;
 	objects[p_id]->y = p.y;
-	p.HP = objects[p_id]->hp;
+	objects[p_id]->hp = p.HP;
 	p.type = SC_LOGIN_OK;
 	p.id = p_id;
 	p.size = sizeof(p);
@@ -299,6 +299,7 @@ void send_add_object(int c_id, int p_id)
 	p.x = objects[p_id]->x;
 	p.y = objects[p_id]->y;
 	p.obj_class = 0;
+	p.HP = objects[p_id]->hp;
 	strcpy_s(p.name, objects[p_id]->m_name);
 	send_packet(c_id, &p);
 }
@@ -548,14 +549,26 @@ void process_packet(int p_id, unsigned char* p_buf)
 		ev.id = p_id;
 		ev.e_type = DB_LOGIN;
 		login_queue.push(ev);
+		break;
 	}
-				 break;
 	case CS_MOVE: {
 		cs_packet_move* packet = reinterpret_cast<cs_packet_move*>(p_buf);
 		(*static_cast<PLAYER*>(objects[p_id])).move_time = packet->move_time;
 		do_move(p_id, packet->direction);
+		break;
 	}
-				break;
+	case CS_ATTACK: {
+		cs_packet_attack* packet = reinterpret_cast<cs_packet_attack*>(p_buf);
+		static_cast<PLAYER*>(objects[p_id])->m_vl.lock();
+		auto objs = static_cast<PLAYER*>(objects[p_id])->m_view_list;
+		static_cast<PLAYER*>(objects[p_id])->m_vl.unlock();
+
+		for (const auto& obj_id : objs) {
+			if (2 >= abs(objects[obj_id]->x - objects[p_id]->x) && 2 >= abs(objects[obj_id]->y - objects[p_id]->y))
+				do_attack(obj_id, p_id);
+		}
+		break;
+	}
 	default:
 		cout << "Unknown Packet Type from Client[" << p_id;
 		cout << "] Packet Type [" << p_buf[1] << "]";
@@ -844,7 +857,6 @@ void do_database() {
 
 					objects[p_id]->m_state = PLST_INGAME;
 					sprintf_s(objects[p_id]->m_name, ev.charId);
-					objects[p_id]->hp = 100;
 
 					// sector
 					int sectorX = objects[p_id]->x / SECTOR_RADIUS;
@@ -1043,7 +1055,7 @@ int main()
 				break;
 			}
 			auto& pl = objects[i];
-
+			objects[i]->hp = 100;
 			pl->id = i;
 
 			sprintf_s(pl->m_name, "NPC %d", i);

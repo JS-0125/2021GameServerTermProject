@@ -348,6 +348,17 @@ void send_move_packet(char dr)
 	socket.send(&packet, sizeof(packet), sent);
 }
 
+
+void send_attack_packet(char dr)
+{
+	cs_packet_attack packet;
+	packet.size = sizeof(packet);
+	packet.type = CS_ATTACK;
+	size_t sent = 0;
+	socket.send(&packet, sizeof(packet), sent);
+}
+
+
 void send_login_packet(string &name)
 {
 	cs_packet_login packet;
@@ -414,11 +425,16 @@ int main()
 				case sf::Keyboard::Down:
 					p_type = 1;
 					break;
+				case sf::Keyboard::A: {
+					p_type = 4;
+					send_attack_packet(p_type);
+					break;
+				}
 				case sf::Keyboard::Escape:
 					window.close();
 					break;
 				}
-				if (-1 != p_type) send_move_packet(p_type);
+				if (-1 != p_type && p_type<4) send_move_packet(p_type);
 			}
 		}
 
