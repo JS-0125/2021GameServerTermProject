@@ -25,6 +25,7 @@ constexpr int SECTOR_RADIUS = 40;
 
 
 enum OP_TYPE { OP_RECV, OP_SEND, OP_ACCEPT, OP_RANDOM_MOVE, OP_ATTACK, OP_CHASE, OP_POINT_MOVE};
+enum DATABASE_TYPE{DB_LOGIN, DB_LOGOUT };
 enum PL_STATE { PLST_FREE, PLST_CONNECTED, PLST_INGAME};
 enum OBJ_CLASS { PLAYER_CLASS, ARGO_CLASS, PEACE_CLASS };
 enum NPC_STATE {NPC_RANDOM_MOVE, NPC_ATTACK, NPC_STAY, NPC_CHASE};
@@ -43,6 +44,7 @@ struct TIMER_EVENT {
 };
 
 struct LOGIN_EVENT {
+	DATABASE_TYPE e_type;
 	char charId[MAX_ID_LEN];
 	int id;
 };
@@ -119,6 +121,7 @@ constexpr int SERVER_ID = 0;
 HANDLE h_iocp;
 
 vector<vector<bool>> can_move;
+
 GameDatabase *gameDatabase;
 
 unordered_set<pair<int, int>, pair_hash> sector_update(int p_id)
@@ -262,22 +265,15 @@ int get_new_player_id(SOCKET p_socket)
 	return -1;
 }
 
-void send_login_ok_packet(int p_id)
+void send_login_ok_packet(int p_id, sc_packet_login_ok p)
 {
-	sc_packet_login_ok p;
+	objects[p_id]->level = p.LEVEL;
+	objects[p_id]->exp = p.EXP;
+	objects[p_id]->x = p.x;
+	objects[p_id]->y = p.y;
 	p.HP = objects[p_id]->hp;
-	p.EXP = objects[p_id]->exp;
-	p.id = p_id;
-	p.LEVEL = objects[p_id]->level;
 	p.type = SC_LOGIN_OK;
-	while (1) {
-		int tmpX = rand() % WORLD_WIDTH, tmpY = rand() % WORLD_HEIGHT;
-		if (can_move[tmpY][tmpX]) {
-			p.x = objects[p_id]->x = tmpX;
-			p.y = objects[p_id]->y = tmpY;
-			break;
-		}
-	}
+	p.id = p_id;
 	p.size = sizeof(p);
 	send_packet(p_id, &p);
 }
@@ -344,6 +340,11 @@ void disconnect(int p_id)
 
 	if (PLST_FREE == player->m_state) return;
 	closesocket(player->m_socket);
+
+	LOGIN_EVENT ev;
+	ev.id = p_id;
+	ev.e_type = DB_LOGOUT;
+	login_queue.push(ev);
 
 	auto serctorIndex = sector_update(p_id);
 	sector[player->sectorY][player->sectorX].m_playerLock.lock();
@@ -545,6 +546,7 @@ void process_packet(int p_id, unsigned char* p_buf)
 		LOGIN_EVENT ev;
 		sprintf_s(ev.charId, packet->player_id);
 		ev.id = p_id;
+		ev.e_type = DB_LOGIN;
 		login_queue.push(ev);
 	}
 				 break;
@@ -822,75 +824,88 @@ void worker(HANDLE h_iocp, SOCKET l_socket)
 	}
 }
 
-void do_login() {
+void do_database() {
 	for (;;) {
 		if (!login_queue.empty()) {
-			LOGIN_EVENT login_ev;
-			if (login_queue.try_pop(login_ev)) {
-				int p_id = login_ev.id;
-				if (gameDatabase->IdCheck(login_ev.charId)) {
-					send_login_ok_packet(p_id);
-				}
-				else {
-					if (gameDatabase->addID(login_ev.charId))
-						send_login_ok_packet(p_id);
-					else
-						disconnect(p_id);
-				}
+			LOGIN_EVENT ev;
+			if (login_queue.try_pop(ev)) {
+				if (ev.e_type == DB_LOGIN) {
+					int p_id = ev.id;
+					sc_packet_login_ok p;
+					if (gameDatabase->IdCheck(ev.charId, p)) {
+						send_login_ok_packet(p_id, p);
+					}
+					else {
+						if (gameDatabase->addID(ev.charId, p))
+							send_login_ok_packet(p_id, p);
+						else
+							disconnect(p_id);
+					}
 
-				objects[p_id]->m_state = PLST_INGAME;
-				sprintf_s(objects[p_id]->m_name, login_ev.charId);
-				objects[p_id]->hp = 100;
+					objects[p_id]->m_state = PLST_INGAME;
+					sprintf_s(objects[p_id]->m_name, ev.charId);
+					objects[p_id]->hp = 100;
 
-				// sector
-				int sectorX = objects[p_id]->x / SECTOR_RADIUS;
-				int sectorY = objects[p_id]->y / SECTOR_RADIUS;
-				objects[p_id]->sectorX = sectorX;
-				objects[p_id]->sectorY = sectorY;
+					// sector
+					int sectorX = objects[p_id]->x / SECTOR_RADIUS;
+					int sectorY = objects[p_id]->y / SECTOR_RADIUS;
+					objects[p_id]->sectorX = sectorX;
+					objects[p_id]->sectorY = sectorY;
 
-				sector[sectorY][sectorX].m_playerLock.lock();
-				sector[sectorY][sectorX].players.insert(p_id);
-				sector[sectorY][sectorX].m_playerLock.unlock();
+					sector[sectorY][sectorX].m_playerLock.lock();
+					sector[sectorY][sectorX].players.insert(p_id);
+					sector[sectorY][sectorX].m_playerLock.unlock();
 
-				auto serctorIndex = sector_update(p_id);
+					auto serctorIndex = sector_update(p_id);
 
-				for (auto& index : serctorIndex) {
-					//sector[index.first][index.second].m_playerLock.lock();
-					for (auto& pl_id : sector[index.first][index.second].players) {
-						if (p_id != pl_id) {
-							if (PLST_INGAME == objects[pl_id]->m_state) {
-								if (can_see(p_id, pl_id))
-								{
-									// 다른 플레이어가 시야 안에 있을 때
-									if (is_npc(pl_id) == false) {
-										// player
-										PLAYER* player = static_cast<PLAYER*>(objects[p_id]);
+					for (auto& index : serctorIndex) {
+						//sector[index.first][index.second].m_playerLock.lock();
+						for (auto& pl_id : sector[index.first][index.second].players) {
+							if (p_id != pl_id) {
+								if (PLST_INGAME == objects[pl_id]->m_state) {
+									if (can_see(p_id, pl_id))
+									{
+										// 다른 플레이어가 시야 안에 있을 때
+										if (is_npc(pl_id) == false) {
+											// player
+											PLAYER* player = static_cast<PLAYER*>(objects[p_id]);
 
-										player->m_vl.lock();
-										player->m_view_list.insert(pl_id);
-										player->m_vl.unlock();
-										send_add_object(p_id, pl_id);
+											player->m_vl.lock();
+											player->m_view_list.insert(pl_id);
+											player->m_vl.unlock();
+											send_add_object(p_id, pl_id);
 
-										// 다른 플레이어
-										PLAYER* otherPl = static_cast<PLAYER*>(objects[pl_id]);
+											// 다른 플레이어
+											PLAYER* otherPl = static_cast<PLAYER*>(objects[pl_id]);
 
-										otherPl->m_vl.lock();
-										otherPl->m_view_list.insert(p_id);
-										otherPl->m_vl.unlock();
-										send_add_object(pl_id, p_id);
-									}
-									// npc일 때
-									else {
-										// 시야 안에 있는 npc 깨우기
-										if (objects[pl_id]->obj_class == ARGO_CLASS)
-											wake_up_npc(pl_id);
-										// player에게 npc 전송
-										send_add_object(p_id, pl_id);
+											otherPl->m_vl.lock();
+											otherPl->m_view_list.insert(p_id);
+											otherPl->m_vl.unlock();
+											send_add_object(pl_id, p_id);
+										}
+										// npc일 때
+										else {
+											// 시야 안에 있는 npc 깨우기
+											if (objects[pl_id]->obj_class == ARGO_CLASS)
+												wake_up_npc(pl_id);
+											// player에게 npc 전송
+											send_add_object(p_id, pl_id);
+										}
 									}
 								}
 							}
 						}
 					}
+				}			
+				else if (ev.e_type == DB_LOGOUT) {
+					auto pl = objects[ev.id];
+					sc_packet_login_ok p;
+					p.EXP = pl->exp;
+					p.HP = pl->hp;
+					p.x = pl->x;
+					p.y = pl->y;
+
+					gameDatabase->updateChar(pl->m_name, p);
 				}
 			}
 		}
@@ -986,16 +1001,26 @@ int main()
 
 	//database set
 	gameDatabase = new GameDatabase();
+	/*sc_packet_login_ok p;
+	p.EXP = 0;
+	p.LEVEL = 0;
+	p.x = 1;
+	p.y = 1;
 
-	/*if (gameDatabase->IdCheck((char*)"may"))
-		cout << "okokok" << endl;
+	if (gameDatabase->IdCheck("fff", p))
+		cout << p.x<<", "<<p.y<<" - "<<p.LEVEL <<", " <<p.EXP << endl;
 	else {
-		cout << "뭐" << endl;
-		if (gameDatabase->addID((char*)"may"))
-			cout << "hey 추가 성공" << endl;
+		cout << "못찾음 ㅜ" << endl;
+		if (gameDatabase->addID("fff", p)) {
+			cout << "0 추가 성공" << endl;
+			cout << p.x << ", " << p.y << " - " << p.LEVEL << ", " << p.EXP << endl;
+		}
 		else
 			cout << "ㅜㅜ" << endl;
-	}*/
+	}
+
+	if (gameDatabase->updateChar("1", p))
+		cout << "저장성공" << endl;*/
 
 	for (int i = 0; i < MAX_USER + 1; ++i) {
 		if (is_npc(i) == true) {
@@ -1105,11 +1130,11 @@ int main()
 	//thread ai_thread{ do_ai };
 	//ai_thread.join();
 
+	thread database_thread{ do_database };
 	thread timer_thread{ do_timer };
-	thread login_thread{ do_login };
 
+	database_thread.join();
 	timer_thread.join();
-	login_thread.join();
 
 	for (auto& th : worker_threads)
 		th.join();
