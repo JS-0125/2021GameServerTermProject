@@ -43,16 +43,19 @@ vector<vector<bool>> can_move;
 
 sf::RenderWindow* g_window;
 sf::Font g_font;
+enum OBJ_CLASS { PLAYER_CLASS, ARGO_CLASS, PEACE_CLASS };
+
 
 class OBJECT {
 private:
 	bool m_showing;
-	sf::Sprite m_sprite;
 	sf::Text m_name;
 	sf::Text m_chat;
 	sf::Text m_hp;
+	sf::Text m_level;
 	chrono::system_clock::time_point m_mess_end_time;
 public:
+	sf::Sprite m_sprite;
 	int m_x, m_y;
 	int hp, exp, level;
 
@@ -93,14 +96,17 @@ public:
 		float ry = (m_y - g_top_y) * 65.0f + 8;
 		m_sprite.setPosition(rx, ry);
 		g_window->draw(m_sprite);
-		m_hp.setPosition(rx - 10, ry - 30);
+		m_hp.setPosition(rx, ry - 30);
 		g_window->draw(m_hp);
+		m_level.setPosition(rx - 20, ry - 30);
+		g_window->draw(m_level);
+
 		if (m_mess_end_time < chrono::system_clock::now()) {
-			m_name.setPosition(rx - 10, ry - 20);
+			m_name.setPosition(rx, ry - 20);
 			g_window->draw(m_name);
 		}
 		else {
-			m_chat.setPosition(rx - 10, ry - 20);
+			m_chat.setPosition(rx, ry - 20);
 			g_window->draw(m_chat);
 		}
 	}
@@ -117,11 +123,17 @@ public:
 		m_chat.setStyle(sf::Text::Bold);
 		m_mess_end_time = chrono::system_clock::now() + chrono::seconds(3);
 	}
-	void set_hp(const char str[]) {
+	void set_hp() {
 		m_hp.setFont(g_font);
-		m_hp.setString(str);
+		m_hp.setString((char*)(&to_string(hp)));
 		m_hp.setFillColor(sf::Color(255, 0, 0));
 		m_hp.setStyle(sf::Text::Bold);
+	}
+	void set_level() {
+		m_level.setFont(g_font);
+		m_level.setString((char*)(&to_string(level)));
+		m_level.setFillColor(sf::Color(255, 255, 255));
+		m_level.setStyle(sf::Text::Bold);
 	}
 };
 
@@ -133,6 +145,12 @@ OBJECT black_tile;
 
 sf::Texture* board;
 sf::Texture* pieces;
+
+sf::Text my_hp;
+sf::Text my_exp;
+sf::Text my_level;
+
+void set_str();
 
 void client_initialize()
 {
@@ -147,10 +165,31 @@ void client_initialize()
 	white_tile = OBJECT{ *board, 5, 5, TILE_WIDTH, TILE_WIDTH };
 	black_tile = OBJECT{ *board, 69, 5, TILE_WIDTH, TILE_WIDTH };
 	avatar = OBJECT{ *pieces, 128, 0, 64, 64 };
+	set_str();
 	//avatar.move(4, 4);
 	for (auto& pl : players) {
 		pl = OBJECT{ *pieces, 64, 0, 64, 64 };
 	}
+}
+
+void set_str() {
+	my_hp.setFont(g_font);
+	my_hp.setString((char*)(&to_string(avatar.hp)));
+	my_hp.setFillColor(sf::Color(255, 0, 0));
+	my_hp.setStyle(sf::Text::Bold);
+	my_hp.setPosition(g_left_x+20, 60);
+
+	my_exp.setFont(g_font);
+	my_exp.setString((char*)(&to_string(avatar.exp)));
+	my_exp.setFillColor(sf::Color(255, 0, 0));
+	my_exp.setStyle(sf::Text::Bold);
+	my_exp.setPosition(g_left_x+20, 80);
+
+	my_level.setFont(g_font);
+	my_level.setString((char*)(&to_string(avatar.level)));
+	my_level.setFillColor(sf::Color(255, 0, 0));
+	my_level.setStyle(sf::Text::Bold);
+	my_level.setPosition(g_left_x + 20, 100);
 }
 
 void client_finish()
@@ -170,9 +209,12 @@ void ProcessPacket(char* ptr)
 		g_myid = packet->id;
 		avatar.m_x = packet->x;
 		avatar.m_y = packet->y;
+		avatar.exp = packet->EXP;
+		avatar.hp = packet->HP;
+		avatar.level = packet->LEVEL;
 
-		avatar.set_name((char*)(&to_string(packet->id)));
-		avatar.set_hp((char*)(&to_string(packet->HP)));
+		avatar.set_name((char*)"ME!");
+
 		g_left_x = packet->x - SCREEN_WIDTH / 2;
 		g_top_y = packet->y - SCREEN_HEIGHT / 2;
 		avatar.move(packet->x, packet->y);
@@ -187,7 +229,23 @@ void ProcessPacket(char* ptr)
 		//players[id].set_name(my_packet->name);
 
 		if (id < MAX_USER) {
+			switch (my_packet->obj_class)
+			{
+			case PLAYER_CLASS:
+				players[id].m_sprite.setTextureRect(sf::IntRect(198, 0, 64, 64));
+				break;
+			case ARGO_CLASS:
+				players[id].m_sprite.setTextureRect(sf::IntRect(64, 0, 64, 64));
+				break;
+			case PEACE_CLASS:
+				players[id].m_sprite.setTextureRect(sf::IntRect(0, 0, 64, 64));
+				break;
+			}
 			players[id].set_name(my_packet->name);
+			players[id].hp = my_packet->HP;
+			players[id].level = my_packet->LEVEL;
+			players[id].set_hp();
+			players[id].set_level();
 			players[id].move(my_packet->x, my_packet->y);
 			players[id].show();
 		}
@@ -255,13 +313,15 @@ void ProcessPacket(char* ptr)
 			avatar.hp = my_packet->HP;
 			avatar.exp = my_packet->EXP;
 			avatar.level = my_packet->LEVEL;
-			avatar.set_hp((char*)(&to_string(my_packet->HP)));
+			avatar.set_hp();
+			avatar.set_level();
 		}
 		else {
 			players[other_id].hp = my_packet->HP;
 			players[other_id].exp = my_packet->EXP;
 			players[other_id].level = my_packet->LEVEL;
-			players[other_id].set_hp((char*)(&to_string(my_packet->HP)));
+			players[other_id].set_hp();
+			players[other_id].set_level();
 		}
 		/*else {
 			npc[other_id - NPC_START].attr &= ~BOB_ATTR_VISIBLE;
@@ -336,6 +396,11 @@ void client_main()
 	sprintf_s(buf, "(%d, %d)", avatar.m_x, avatar.m_y);
 	text.setString(buf);
 	g_window->draw(text);
+
+	set_str();
+	g_window->draw(my_hp);
+	g_window->draw(my_exp);
+	g_window->draw(my_level);
 }
 
 void send_move_packet(char dr)

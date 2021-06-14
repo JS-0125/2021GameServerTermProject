@@ -24,11 +24,11 @@ constexpr int MAX_BUFFER = 1024;
 constexpr int SECTOR_RADIUS = 40;
 
 
-enum OP_TYPE { OP_RECV, OP_SEND, OP_ACCEPT, OP_RANDOM_MOVE, OP_ATTACK, OP_CHASE, OP_POINT_MOVE};
+enum OP_TYPE { OP_RECV, OP_SEND, OP_ACCEPT, OP_RANDOM_MOVE, OP_ATTACK, OP_CHASE, OP_POINT_MOVE, OP_DEAD, OP_RESPAWN};
 enum DATABASE_TYPE{DB_LOGIN, DB_LOGOUT };
 enum PL_STATE { PLST_FREE, PLST_CONNECTED, PLST_INGAME};
 enum OBJ_CLASS { PLAYER_CLASS, ARGO_CLASS, PEACE_CLASS };
-enum NPC_STATE {NPC_RANDOM_MOVE, NPC_ATTACK, NPC_STAY, NPC_CHASE};
+enum NPC_STATE {NPC_RANDOM_MOVE, NPC_ATTACK, NPC_STAY, NPC_CHASE, NPC_DEAD};
 //enum DIRECTION { D_N, D_S, D_W, D_E, D_NO };
 
 struct TIMER_EVENT {
@@ -298,8 +298,9 @@ void send_add_object(int c_id, int p_id)
 	p.type = SC_ADD_OBJECT;
 	p.x = objects[p_id]->x;
 	p.y = objects[p_id]->y;
-	p.obj_class = 0;
+	p.obj_class = objects[p_id]->obj_class;
 	p.HP = objects[p_id]->hp;
+	p.LEVEL = objects[p_id]->level;
 	strcpy_s(p.name, objects[p_id]->m_name);
 	send_packet(c_id, &p);
 }
@@ -509,10 +510,15 @@ void do_move(int p_id, char dir)
 
 // attacked id, attack id
 void do_attack(int c_id, int p_id) {
-	objects[c_id]->hp -= 1;
+	objects[c_id]->hp -= 10;
 	unordered_set<int> old_vl;
 
 	if (!is_npc(c_id)) {
+		if (objects[c_id]->hp < 1) {
+			objects[c_id]->exp = objects[c_id]->exp / 2;
+			objects[c_id]->hp = 100;
+		}
+
 		send_stat_change(c_id, c_id);
 
 		static_cast<PLAYER*> (objects[c_id])->m_vl.lock();
@@ -525,6 +531,41 @@ void do_attack(int c_id, int p_id) {
 		}
 	}
 	else {
+		if (static_cast<ARGO*>(objects[c_id]))
+			objects[p_id]->exp += objects[c_id]->level * objects[c_id]->level * 2 * 2;
+		else
+			objects[p_id]->exp += objects[c_id]->level * objects[c_id]->level * 2;
+
+		if (objects[p_id]->exp > objects[p_id]->level * 100) {
+			objects[p_id]->exp = 0;
+			objects[p_id]->level += 1;
+		}
+		send_stat_change(p_id, p_id);
+
+		// npc 죽으면
+		if (objects[c_id]->hp < 1) {
+			static_cast<NPC*>(objects[c_id])->m_npc_state = NPC_DEAD;
+			//30초 후 부활
+			add_event(c_id, -1, OP_RESPAWN, 30000);
+
+			auto serctorIndex = sector_update(c_id);
+
+			for (auto& index : serctorIndex) {
+				for (auto& obj_id : sector[index.first][index.second].players) {
+					if (PLST_INGAME != objects[obj_id]->m_state) continue;
+					if (is_npc(obj_id) == true) continue;
+					if (can_see(c_id, obj_id))
+						send_remove_object(obj_id, c_id);
+				}
+			}
+
+			sector[objects[c_id]->sectorY][objects[c_id]->sectorX].m_playerLock.lock();
+			sector[objects[c_id]->sectorY][objects[c_id]->sectorX].players.erase(c_id);
+			sector[objects[c_id]->sectorY][objects[c_id]->sectorX].m_playerLock.unlock();
+
+			return;
+		}
+
 		auto serctorIndex = sector_update(c_id);
 
 		for (auto& index : serctorIndex) {
@@ -536,7 +577,6 @@ void do_attack(int c_id, int p_id) {
 			}
 		}
 	}
-	
 }
 
 void process_packet(int p_id, unsigned char* p_buf)
@@ -564,7 +604,7 @@ void process_packet(int p_id, unsigned char* p_buf)
 		static_cast<PLAYER*>(objects[p_id])->m_vl.unlock();
 
 		for (const auto& obj_id : objs) {
-			if (2 >= abs(objects[obj_id]->x - objects[p_id]->x) && 2 >= abs(objects[obj_id]->y - objects[p_id]->y))
+			if (1 >= abs(objects[obj_id]->x - objects[p_id]->x) && 1 >= abs(objects[obj_id]->y - objects[p_id]->y))
 				do_attack(obj_id, p_id);
 		}
 		break;
@@ -833,6 +873,35 @@ void worker(HANDLE h_iocp, SOCKET l_socket)
 
 			break;
 		}
+		case OP_RESPAWN: {
+			if (objects[key]->obj_class == ARGO_CLASS) {
+				static_cast<ARGO*>(objects[key])->path.clear();
+				static_cast<NPC*>(objects[key])->m_npc_state = NPC_RANDOM_MOVE;
+				wake_up_npc(key);
+			}
+			else {
+				static_cast<NPC*>(objects[key])->m_npc_state = NPC_STAY;
+			}
+
+			objects[key]->hp = 100;
+
+			sector[objects[key]->sectorY][objects[key]->sectorX].m_playerLock.lock();
+			sector[objects[key]->sectorY][objects[key]->sectorX].players.insert(key);
+			sector[objects[key]->sectorY][objects[key]->sectorX].m_playerLock.unlock();
+
+			auto serctorIndex = sector_update(key);
+
+			for (auto& index : serctorIndex) {
+				for (auto& obj_id : sector[index.first][index.second].players) {
+					if (PLST_INGAME != objects[obj_id]->m_state) continue;
+					if (is_npc(obj_id) == true) continue;
+					if (can_see(obj_id, key))
+						send_add_object(obj_id, key);
+				}
+			}
+			delete ex_over;
+			break;
+		}
 		}
 	}
 }
@@ -916,7 +985,7 @@ void do_database() {
 					p.HP = pl->hp;
 					p.x = pl->x;
 					p.y = pl->y;
-
+					p.LEVEL = pl->level;
 					gameDatabase->updateChar(pl->m_name, p);
 				}
 			}
@@ -957,6 +1026,11 @@ void do_timer()
 				EX_OVER* ex_over = new EX_OVER;
 				ex_over->m_op = OP_ATTACK;
 				*reinterpret_cast<int*> (ex_over->m_packetbuf) = ev.target_id;
+				PostQueuedCompletionStatus(h_iocp, 1, ev.object, &ex_over->m_over);
+			}
+			else if (ev.e_type == OP_RESPAWN) {
+				EX_OVER* ex_over = new EX_OVER;
+				ex_over->m_op = OP_RESPAWN;
 				PostQueuedCompletionStatus(h_iocp, 1, ev.object, &ex_over->m_over);
 			}
 		}
@@ -1056,6 +1130,7 @@ int main()
 			}
 			auto& pl = objects[i];
 			objects[i]->hp = 100;
+			objects[i]->level = 2;
 			pl->id = i;
 
 			sprintf_s(pl->m_name, "NPC %d", i);
