@@ -65,6 +65,9 @@ struct S_OBJECT
 	short	x, y;
 	short sectorX, sectorY;
 	OBJ_CLASS	obj_class;
+	short hp;
+	short level;
+	int exp;
 };
 
 struct PLAYER : S_OBJECT {
@@ -262,10 +265,10 @@ int get_new_player_id(SOCKET p_socket)
 void send_login_ok_packet(int p_id)
 {
 	sc_packet_login_ok p;
-	p.HP = 10;
-	p.EXP = 0;
+	p.HP = objects[p_id]->hp;
+	p.EXP = objects[p_id]->exp;
 	p.id = p_id;
-	p.LEVEL = 2;
+	p.LEVEL = objects[p_id]->level;
 	p.type = SC_LOGIN_OK;
 	while (1) {
 		int tmpX = rand() % WORLD_WIDTH, tmpY = rand() % WORLD_HEIGHT;
@@ -320,6 +323,18 @@ void send_chat(int c_id, int p_id, const char* mess)
 	p.size = sizeof(p);
 	p.type = SC_CHAT;
 	strcpy_s(p.message, mess);
+	send_packet(c_id, &p);
+}
+
+void send_stat_change(int c_id, int p_id) {
+	sc_packet_stat_change p;
+	p.id = p_id;
+	auto pl = objects[p_id];
+	p.HP = pl->hp;
+	p.EXP = pl->exp;
+	p.LEVEL = pl->level;
+	p.type = SC_STAT_CHANGE;
+	p.size = sizeof(p);
 	send_packet(c_id, &p);
 }
 
@@ -490,6 +505,38 @@ void do_move(int p_id, char dir)
 	}
 }
 
+// attacked id, attack id
+void do_attack(int c_id, int p_id) {
+	objects[c_id]->hp -= 1;
+	unordered_set<int> old_vl;
+
+	if (!is_npc(c_id)) {
+		send_stat_change(c_id, c_id);
+
+		static_cast<PLAYER*> (objects[c_id])->m_vl.lock();
+		const auto view_objs = static_cast<PLAYER*> (objects[c_id])->m_view_list;
+		static_cast<PLAYER*> (objects[c_id])->m_vl.unlock();
+
+		for (const auto& pl : view_objs) {
+			if (!is_npc(pl))
+				send_stat_change(pl, c_id);
+		}
+	}
+	else {
+		auto serctorIndex = sector_update(c_id);
+
+		for (auto& index : serctorIndex) {
+			for (auto& obj_id : sector[index.first][index.second].players) {
+				if (PLST_INGAME != objects[obj_id]->m_state) continue;
+				if (is_npc(obj_id) == true) continue;
+				if (can_see(c_id, obj_id))
+					send_stat_change(obj_id, c_id);
+			}
+		}
+	}
+	
+}
+
 void process_packet(int p_id, unsigned char* p_buf)
 {
 	switch (p_buf[1]) {
@@ -543,8 +590,18 @@ void do_npc_point(NPC& npc, const int x, const int y)
 		for (auto& obj_id : sector[index.first][index.second].players) {
 			if (PLST_INGAME != objects[obj_id]->m_state) continue;
 			if (is_npc(objects[obj_id]->id) == true) continue;
-			if (can_see(npc.id, objects[obj_id]->id)) 
+			if (can_see(npc.id, objects[obj_id]->id)) {
 				new_vl.insert(objects[obj_id]->id);
+
+				// npc 위치 == player 위치
+				if (npc.x == objects[obj_id]->x && npc.y == objects[obj_id]->y) {
+					EX_OVER* new_ex_over = new EX_OVER;
+					new_ex_over->m_op = OP_ATTACK;
+					*reinterpret_cast<int*> (new_ex_over->m_packetbuf) = objects[obj_id]->id;
+					PostQueuedCompletionStatus(h_iocp, 1, npc.id, &new_ex_over->m_over);
+					break;
+				}
+			}
 		}
 	}
 
@@ -560,7 +617,7 @@ void do_npc_point(NPC& npc, const int x, const int y)
 
 		}
 		else {
-		
+
 			// 플레이어가 계속 보고 있음
 			send_move_packet(p_id, npc.id);
 		}
@@ -681,9 +738,12 @@ void worker(HANDLE h_iocp, SOCKET l_socket)
 			delete ex_over;
 			break;
 		}
-		case OP_ATTACK:
+		case OP_ATTACK: {
+			int attacked_id = *reinterpret_cast<int*>(ex_over->m_packetbuf);
+			do_attack(attacked_id, key);
 			delete ex_over;
 			break;
+		}
 		case OP_CHASE: {
 			int player_id = *reinterpret_cast<int*>(ex_over->m_packetbuf);
 			short npcX = objects[key]->x, npcY = objects[key]->y;
@@ -738,7 +798,6 @@ void worker(HANDLE h_iocp, SOCKET l_socket)
 			auto& npc = *static_cast<ARGO*>(objects[key]);
 			if (npc.m_npc_state != NPC_CHASE) 
 				break;
-			
 
 			int player_id = *reinterpret_cast<int*>(ex_over->m_packetbuf);
 
@@ -780,6 +839,8 @@ void do_login() {
 				}
 
 				objects[p_id]->m_state = PLST_INGAME;
+				sprintf_s(objects[p_id]->m_name, login_ev.charId);
+				objects[p_id]->hp = 100;
 
 				// sector
 				int sectorX = objects[p_id]->x / SECTOR_RADIUS;
@@ -863,6 +924,12 @@ void do_timer()
 				EX_OVER* ex_over = new EX_OVER;
 				ex_over->m_op = OP_CHASE;
 				*reinterpret_cast<int*>(ex_over->m_packetbuf) = ev.target_id;
+				PostQueuedCompletionStatus(h_iocp, 1, ev.object, &ex_over->m_over);
+			}
+			else if (ev.e_type == OP_ATTACK) {
+				EX_OVER* ex_over = new EX_OVER;
+				ex_over->m_op = OP_ATTACK;
+				*reinterpret_cast<int*> (ex_over->m_packetbuf) = ev.target_id;
 				PostQueuedCompletionStatus(h_iocp, 1, ev.object, &ex_over->m_over);
 			}
 		}

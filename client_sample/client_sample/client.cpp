@@ -50,9 +50,11 @@ private:
 	sf::Sprite m_sprite;
 	sf::Text m_name;
 	sf::Text m_chat;
+	sf::Text m_hp;
 	chrono::system_clock::time_point m_mess_end_time;
 public:
 	int m_x, m_y;
+	int hp, exp, level;
 
 	OBJECT(sf::Texture& t, int x, int y, int x2, int y2) {
 		m_showing = false;
@@ -91,6 +93,8 @@ public:
 		float ry = (m_y - g_top_y) * 65.0f + 8;
 		m_sprite.setPosition(rx, ry);
 		g_window->draw(m_sprite);
+		m_hp.setPosition(rx - 10, ry - 30);
+		g_window->draw(m_hp);
 		if (m_mess_end_time < chrono::system_clock::now()) {
 			m_name.setPosition(rx - 10, ry - 20);
 			g_window->draw(m_name);
@@ -112,6 +116,12 @@ public:
 		m_chat.setFillColor(sf::Color(255, 255, 255));
 		m_chat.setStyle(sf::Text::Bold);
 		m_mess_end_time = chrono::system_clock::now() + chrono::seconds(3);
+	}
+	void set_hp(const char str[]) {
+		m_hp.setFont(g_font);
+		m_hp.setString(str);
+		m_hp.setFillColor(sf::Color(255, 0, 0));
+		m_hp.setStyle(sf::Text::Bold);
 	}
 };
 
@@ -161,7 +171,8 @@ void ProcessPacket(char* ptr)
 		avatar.m_x = packet->x;
 		avatar.m_y = packet->y;
 
-		//avatar.set_name(packet->name);
+		avatar.set_name((char*)(&to_string(packet->id)));
+		avatar.set_hp((char*)(&to_string(packet->HP)));
 		g_left_x = packet->x - SCREEN_WIDTH / 2;
 		g_top_y = packet->y - SCREEN_HEIGHT / 2;
 		avatar.move(packet->x, packet->y);
@@ -234,6 +245,27 @@ void ProcessPacket(char* ptr)
 		else {
 			//		npc[other_id - NPC_START].attr &= ~BOB_ATTR_VISIBLE;
 		}
+		break;
+	}
+	case SC_STAT_CHANGE:
+	{
+		sc_packet_stat_change* my_packet = reinterpret_cast<sc_packet_stat_change*>(ptr);
+		int other_id = my_packet->id;
+		if (other_id == g_myid) {
+			avatar.hp = my_packet->HP;
+			avatar.exp = my_packet->EXP;
+			avatar.level = my_packet->LEVEL;
+			avatar.set_hp((char*)(&to_string(my_packet->HP)));
+		}
+		else {
+			players[other_id].hp = my_packet->HP;
+			players[other_id].exp = my_packet->EXP;
+			players[other_id].level = my_packet->LEVEL;
+			players[other_id].set_hp((char*)(&to_string(my_packet->HP)));
+		}
+		/*else {
+			npc[other_id - NPC_START].attr &= ~BOB_ATTR_VISIBLE;
+		}*/
 		break;
 	}
 	default:

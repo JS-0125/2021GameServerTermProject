@@ -152,11 +152,12 @@ void ProcessPacket(int ci, unsigned char packet[])
 				}
 			}
 		}
+		break;
 	}
-					   break;
 	case SC_ADD_OBJECT: break;
 	case SC_REMOVE_OBJECT: break;
 	case SC_CHAT: break;
+	case SC_STAT_CHANGE: break;
 	case SC_LOGIN_OK:
 	{
 		g_clients[ci].connected = true;
@@ -172,8 +173,8 @@ void ProcessPacket(int ci, unsigned char packet[])
 		//t_packet.size = sizeof(t_packet);
 		//t_packet.type = CS_TELEPORT;
 		//SendPacket(my_id, &t_packet);
+		break;
 	}
-	break;
 	default: MessageBox(hWnd, L"Unknown Packet Type", L"ERROR", 0);
 		while (true);
 	}
