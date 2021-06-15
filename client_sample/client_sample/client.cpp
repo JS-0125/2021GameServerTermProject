@@ -1,9 +1,7 @@
 #define SFML_STATIC 1
-#include <SFML/Graphics.hpp>
-#include <SFML/Network.hpp>
-#include <iostream>
-#include <chrono>
-#include<fstream>
+#include"default.h"
+#include"TextBox.h"
+
 using namespace std;
 
 #ifdef _DEBUG
@@ -145,10 +143,12 @@ OBJECT black_tile;
 
 sf::Texture* board;
 sf::Texture* pieces;
-
+Textbox *chatText;
 sf::Text my_hp;
 sf::Text my_exp;
 sf::Text my_level;
+
+vector<sf::Text> chatContainer;
 
 void set_str();
 
@@ -170,23 +170,29 @@ void client_initialize()
 	for (auto& pl : players) {
 		pl = OBJECT{ *pieces, 64, 0, 64, 64 };
 	}
+
+	// chat text
+	chatText = new Textbox(30, sf::Color::Blue, true);
+	chatText->setPosition( g_left_x + 300, 0 );
+	chatText->setLimit(true, MAX_STR_LEN-1);
+	chatText->setFont(g_font);
 }
 
 void set_str() {
 	my_hp.setFont(g_font);
-	my_hp.setString((char*)(&to_string(avatar.hp)));
+	//my_hp.setString((char*)(&to_string(avatar.hp)));
 	my_hp.setFillColor(sf::Color(255, 0, 0));
 	my_hp.setStyle(sf::Text::Bold);
 	my_hp.setPosition(g_left_x+20, 60);
 
 	my_exp.setFont(g_font);
-	my_exp.setString((char*)(&to_string(avatar.exp)));
+	//my_exp.setString((char*)(&to_string(avatar.exp)));
 	my_exp.setFillColor(sf::Color(255, 0, 0));
 	my_exp.setStyle(sf::Text::Bold);
 	my_exp.setPosition(g_left_x+20, 80);
 
 	my_level.setFont(g_font);
-	my_level.setString((char*)(&to_string(avatar.level)));
+	//my_level.setString((char*)(&to_string(avatar.level)));
 	my_level.setFillColor(sf::Color(255, 0, 0));
 	my_level.setStyle(sf::Text::Bold);
 	my_level.setPosition(g_left_x + 20, 100);
@@ -196,6 +202,7 @@ void client_finish()
 {
 	delete board;
 	delete pieces;
+	delete chatText;
 }
 
 void ProcessPacket(char* ptr)
@@ -298,7 +305,14 @@ void ProcessPacket(char* ptr)
 			avatar.set_chat(my_packet->message);
 		}
 		else if (other_id < MAX_USER) {
-			players[other_id].set_chat(my_packet->message);
+			sf::Text tmpTex;
+			tmpTex.setFont(g_font);
+			tmpTex.setString(my_packet->message);
+			tmpTex.setFillColor(sf::Color(255, 0, 0));
+			tmpTex.setStyle(sf::Text::Bold);
+			if (chatContainer.size() > 10)
+				chatContainer.erase(chatContainer.begin());
+			chatContainer.emplace_back(tmpTex);
 		}
 		else {
 			//		npc[other_id - NPC_START].attr &= ~BOB_ATTR_VISIBLE;
@@ -397,10 +411,19 @@ void client_main()
 	text.setString(buf);
 	g_window->draw(text);
 
-	set_str();
+	my_hp.setString((char*)(&to_string(avatar.hp)));
+	my_exp.setString((char*)(&to_string(avatar.exp)));
+	my_level.setString((char*)(&to_string(avatar.level)));
+
 	g_window->draw(my_hp);
 	g_window->draw(my_exp);
 	g_window->draw(my_level);
+	chatText->drawTo(*g_window);
+
+	for (int i = 0; i < chatContainer.size(); ++i) {
+		chatContainer[i].setPosition(0, g_top_y + i*50);
+		g_window->draw(chatContainer[i]);
+	}
 }
 
 void send_move_packet(char dr)
@@ -430,6 +453,16 @@ void send_login_packet(string &name)
 	packet.size = sizeof(packet);
 	packet.type = CS_LOGIN;
 	strcpy_s(packet.player_id, name.c_str());
+	size_t sent = 0;
+	socket.send(&packet, sizeof(packet), sent);
+}
+
+void send_chat_packet(string mess)
+{
+	cs_packet_chat packet;
+	packet.size = sizeof(packet);
+	packet.type = CS_CHAT;
+	strcpy_s(packet.message, mess.c_str());
 	size_t sent = 0;
 	socket.send(&packet, sizeof(packet), sent);
 }
@@ -471,10 +504,43 @@ int main()
 	while (window.isOpen())
 	{
 		sf::Event event;
+
+		if (sf::Keyboard::isKeyPressed(sf::Keyboard::LShift)) {
+				chatText->setSelected(true);
+		}
+		else if (sf::Keyboard::isKeyPressed(sf::Keyboard::Enter)) {
+			if (chatText->isSelctedTexBox()) {
+				if (0 != chatText->isInText()) {
+					char tmpMess[MAX_STR_LEN];
+					strcpy_s(tmpMess, (chatText->getText()).c_str());
+
+					send_chat_packet(tmpMess);
+
+					sf::Text tmpTex;
+					tmpTex.setFont(g_font);
+					tmpTex.setString(tmpMess);
+					tmpTex.setFillColor(sf::Color(255, 0, 0));
+					tmpTex.setStyle(sf::Text::Bold);
+					if (chatContainer.size() > 10)
+						chatContainer.erase(chatContainer.begin());
+					chatContainer.emplace_back(tmpTex);
+
+					chatText->textReset();
+				}
+			}
+			chatText->setSelected(false);
+		}
+
 		while (window.pollEvent(event))
 		{
 			if (event.type == sf::Event::Closed)
 				window.close();
+
+			if (event.type == sf::Event::TextEntered && chatText->isSelctedTexBox()) {
+				chatText->typedOn(event);
+				break;
+			}
+
 			if (event.type == sf::Event::KeyPressed) {
 				char p_type = -1;
 				switch (event.key.code) {

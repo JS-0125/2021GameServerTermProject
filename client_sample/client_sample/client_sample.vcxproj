@@ -121,6 +121,7 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="client.cpp" />
+    <ClCompile Include="TextBox.cpp" />
   </ItemGroup>
   <ItemGroup>
     <Image Include="chess2.png" />
@@ -128,6 +129,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\..\st_iocp_server\st_iocp_server\2021_텀프_protocol.h" />
+    <ClInclude Include="default.h" />
     <ClInclude Include="include\SFML\Config.hpp" />
     <ClInclude Include="include\SFML\Graphics.hpp" />
     <ClInclude Include="include\SFML\Graphics\BlendMode.hpp" />
@@ -207,6 +209,7 @@
     <ClInclude Include="include\SFML\Window\Window.hpp" />
     <ClInclude Include="include\SFML\Window\WindowHandle.hpp" />
     <ClInclude Include="include\SFML\Window\WindowStyle.hpp" />
+    <ClInclude Include="TextBox.h" />
   </ItemGroup>
   <ItemGroup>
     <None Include="include\SFML\Graphics\Glsl.inl" />

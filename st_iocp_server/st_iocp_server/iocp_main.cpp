@@ -609,6 +609,17 @@ void process_packet(int p_id, unsigned char* p_buf)
 		}
 		break;
 	}
+	case CS_CHAT: {
+		cs_packet_chat* packet = reinterpret_cast<cs_packet_chat*>(p_buf);
+		cout << packet->message << endl;
+		for (const auto& pl : objects) {
+			if (pl->id == p_id)
+				continue;
+			if (!is_npc(pl->id)&& pl->m_state == PLST_INGAME)
+				send_chat(pl->id, p_id, packet->message);
+		}
+		break;
+	}
 	default:
 		cout << "Unknown Packet Type from Client[" << p_id;
 		cout << "] Packet Type [" << p_buf[1] << "]";
