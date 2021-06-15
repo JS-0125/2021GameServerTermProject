@@ -29,7 +29,6 @@ enum DATABASE_TYPE{DB_LOGIN, DB_LOGOUT };
 enum PL_STATE { PLST_FREE, PLST_CONNECTED, PLST_INGAME};
 enum OBJ_CLASS { PLAYER_CLASS, ARGO_CLASS, PEACE_CLASS };
 enum NPC_STATE {NPC_RANDOM_MOVE, NPC_ATTACK, NPC_STAY, NPC_CHASE, NPC_DEAD};
-//enum DIRECTION { D_N, D_S, D_W, D_E, D_NO };
 
 struct TIMER_EVENT {
 	int object;
@@ -258,7 +257,7 @@ int get_new_player_id(SOCKET p_socket)
 		if (PLST_FREE == objects[i]->m_state) {
 			objects[i]->m_state = PLST_CONNECTED;
 			(*static_cast<PLAYER*>(objects[i])).m_socket = p_socket;
-			objects[i]->m_name[0] = 0;
+			
 			return i;
 		}
 	}
@@ -512,12 +511,19 @@ void do_move(int p_id, char dir)
 void do_attack(int c_id, int p_id) {
 	objects[c_id]->hp -= 10;
 	unordered_set<int> old_vl;
+	char tmp[MAX_STR_LEN];
+
+	if(!is_npc(p_id))
+		send_stat_change(p_id, c_id);
 
 	if (!is_npc(c_id)) {
 		if (objects[c_id]->hp < 1) {
 			objects[c_id]->exp = objects[c_id]->exp / 2;
 			objects[c_id]->hp = 100;
+			sprintf_s(tmp, "%s is killed by %s", objects[c_id]->m_name, objects[p_id]->m_name);
 		}
+		else
+			sprintf_s(tmp, "%s attack %s", objects[p_id]->m_name, objects[c_id]->m_name);
 
 		send_stat_change(c_id, c_id);
 
@@ -529,21 +535,44 @@ void do_attack(int c_id, int p_id) {
 			if (!is_npc(pl))
 				send_stat_change(pl, c_id);
 		}
+
+		/*auto serctorIndex = sector_update(c_id);
+
+		for (auto& index : serctorIndex) {
+			for (auto& obj_id : sector[index.first][index.second].players) {
+				if (PLST_INGAME != objects[obj_id]->m_state) continue;
+				if (is_npc(obj_id) == true) continue;
+				if (can_see(c_id, obj_id))
+					send_stat_change(obj_id, c_id);
+			}
+		}*/
 	}
 	else {
-		if (static_cast<ARGO*>(objects[c_id]))
-			objects[p_id]->exp += objects[c_id]->level * objects[c_id]->level * 2 * 2;
-		else
-			objects[p_id]->exp += objects[c_id]->level * objects[c_id]->level * 2;
-
-		if (objects[p_id]->exp > objects[p_id]->level * 100) {
-			objects[p_id]->exp = 0;
-			objects[p_id]->level += 1;
-		}
-		send_stat_change(p_id, p_id);
+		sprintf_s(tmp, "%s attack %s", objects[p_id]->m_name, objects[c_id]->m_name);
 
 		// npc 죽으면
 		if (objects[c_id]->hp < 1) {
+			if (!is_npc(p_id)) {
+				if (static_cast<ARGO*>(objects[c_id])) {
+					int exp = objects[c_id]->level * objects[c_id]->level * 2 * 2;
+					objects[p_id]->exp += exp;
+					sprintf_s(tmp, "%s kill %s and get %d exp", objects[p_id]->m_name, objects[c_id]->m_name, exp);
+				}
+				else {
+					int exp = objects[c_id]->level * objects[c_id]->level * 2;
+					objects[p_id]->exp += exp;
+					sprintf_s(tmp, "%s kill %s and get %d exp", objects[p_id]->m_name, objects[c_id]->m_name, exp);
+				}
+
+				if (objects[p_id]->exp > objects[p_id]->level * 100) {
+					objects[p_id]->exp = 0;
+					objects[p_id]->level += 1;
+					sprintf_s(tmp, "%s's level up to %dLEVEL", objects[p_id]->m_name, objects[p_id]->level);
+				}
+
+				send_stat_change(p_id, p_id);
+			}
+			
 			static_cast<NPC*>(objects[c_id])->m_npc_state = NPC_DEAD;
 			//30초 후 부활
 			add_event(c_id, -1, OP_RESPAWN, 30000);
@@ -562,20 +591,12 @@ void do_attack(int c_id, int p_id) {
 			sector[objects[c_id]->sectorY][objects[c_id]->sectorX].m_playerLock.lock();
 			sector[objects[c_id]->sectorY][objects[c_id]->sectorX].players.erase(c_id);
 			sector[objects[c_id]->sectorY][objects[c_id]->sectorX].m_playerLock.unlock();
-
-			return;
 		}
+	}
 
-		auto serctorIndex = sector_update(c_id);
-
-		for (auto& index : serctorIndex) {
-			for (auto& obj_id : sector[index.first][index.second].players) {
-				if (PLST_INGAME != objects[obj_id]->m_state) continue;
-				if (is_npc(obj_id) == true) continue;
-				if (can_see(c_id, obj_id))
-					send_stat_change(obj_id, c_id);
-			}
-		}
+	for (const auto& pl : objects) {
+		if (!is_npc(pl->id) && pl->m_state == PLST_INGAME)
+			send_chat(pl->id, -1, tmp);
 	}
 }
 

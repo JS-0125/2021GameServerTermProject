@@ -172,7 +172,7 @@ void client_initialize()
 	}
 
 	// chat text
-	chatText = new Textbox(30, sf::Color::Blue, true);
+	chatText = new Textbox(30, sf::Color::Blue, false);
 	chatText->setPosition( g_left_x + 300, 0 );
 	chatText->setLimit(true, MAX_STR_LEN-1);
 	chatText->setFont(g_font);
@@ -301,22 +301,19 @@ void ProcessPacket(char* ptr)
 	{
 		sc_packet_chat* my_packet = reinterpret_cast<sc_packet_chat*>(ptr);
 		int other_id = my_packet->id;
-		if (other_id == g_myid) {
-			avatar.set_chat(my_packet->message);
-		}
-		else if (other_id < MAX_USER) {
-			sf::Text tmpTex;
-			tmpTex.setFont(g_font);
-			tmpTex.setString(my_packet->message);
-			tmpTex.setFillColor(sf::Color(255, 0, 0));
-			tmpTex.setStyle(sf::Text::Bold);
-			if (chatContainer.size() > 10)
-				chatContainer.erase(chatContainer.begin());
-			chatContainer.emplace_back(tmpTex);
-		}
-		else {
-			//		npc[other_id - NPC_START].attr &= ~BOB_ATTR_VISIBLE;
-		}
+
+		sf::Text tmpTex;
+		if (other_id < 0) 
+			tmpTex.setFillColor(sf::Color::Blue);
+		else if (other_id < MAX_USER) 
+			tmpTex.setFillColor(sf::Color::Red);
+			
+		tmpTex.setFont(g_font);
+		tmpTex.setString(my_packet->message);
+		tmpTex.setStyle(sf::Text::Bold);
+		if (chatContainer.size() > 10)
+			chatContainer.erase(chatContainer.begin());
+		chatContainer.emplace_back(tmpTex);
 		break;
 	}
 	case SC_STAT_CHANGE:
@@ -469,6 +466,7 @@ void send_chat_packet(string mess)
 
 int main()
 {
+	setlocale(LC_ALL, "korean");
 	wcout.imbue(locale("korean"));
 	sf::Socket::Status status = socket.connect("127.0.0.1", SERVER_PORT);
 
